@@ -1,0 +1,120 @@
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+from run_pipeline import discover_video_subtitle_pairs, run_for_video, main
+
+
+SRT_CONTENT = """1
+00:00:20,000 --> 00:00:22,000
+펭귄이 걸어가요.
+
+2
+00:00:24,000 --> 00:00:26,000
+이제 물속으로 들어가요.
+"""
+
+
+def test_discover_video_subtitle_pairs_matches_by_basename(tmp_path):
+    (tmp_path / "penguin.mp4").write_bytes(b"fake-video")
+    (tmp_path / "penguin.srt").write_text(SRT_CONTENT, encoding="utf-8")
+    (tmp_path / "orphan.srt").write_text(SRT_CONTENT, encoding="utf-8")
+
+    pairs = discover_video_subtitle_pairs(str(tmp_path))
+
+    assert len(pairs) == 1
+    video_path, subtitle_path, video_id = pairs[0]
+    assert video_id == "penguin"
+    assert video_path.endswith("penguin.mp4")
+    assert subtitle_path.endswith("penguin.srt")
+
+
+class FakeBackend:
+    """image_paths가 비어있으면(narrative_segmenter의 텍스트 전용 호출) breakpoints를,
+    아니면(activity_generator의 비전 호출) 활동 JSON을 돌려준다."""
+
+    def generate(self, prompt, image_paths):
+        if not image_paths:
+            return json.dumps(
+                {"breakpoints": [{"timestamp_sec": 22.0, "reason": "펭귄 소개가 끝나는 지점"}]},
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {"is_suitable": True, "score": 0.9, "type": "관찰", "question": "무엇을 봤나요?"},
+            ensure_ascii=False,
+        )
+
+
+def test_run_for_video_produces_valid_activities_dict(tmp_path):
+    video_path = tmp_path / "penguin.mp4"
+    video_path.write_bytes(b"fake-video")
+    subtitle_path = tmp_path / "penguin.srt"
+    subtitle_path.write_text(SRT_CONTENT, encoding="utf-8")
+
+    with patch("run_pipeline.extract_frames", return_value=["frame1.jpg"]):
+        result = run_for_video(
+            video_path=str(video_path),
+            subtitle_path=str(subtitle_path),
+            video_id="penguin",
+            video_meta={"topic": "동물", "age_range": "4-6"},
+            output_dir=str(tmp_path / "out"),
+            backend=FakeBackend(),
+            video_duration_sec=100.0,
+            target_count=5,
+        )
+
+    assert result["video_id"] == "penguin"
+    assert result["source"]["subtitle_file"].endswith("penguin.srt")
+    assert len(result["activities"]) == 1
+    assert result["activities"][0]["timestamp_sec"] == 22.0
+    assert (tmp_path / "out" / "penguin_activities.json").exists()
+
+
+def test_run_for_video_skips_gracefully_on_bad_subtitle(tmp_path):
+    video_path = tmp_path / "broken.mp4"
+    video_path.write_bytes(b"fake-video")
+    subtitle_path = tmp_path / "broken.srt"
+    subtitle_path.write_text("이건 SRT 형식이 아닙니다", encoding="utf-8")
+
+    result = run_for_video(
+        video_path=str(video_path),
+        subtitle_path=str(subtitle_path),
+        video_id="broken",
+        video_meta={},
+        output_dir=str(tmp_path / "out"),
+        backend=FakeBackend(),
+        video_duration_sec=100.0,
+        target_count=5,
+    )
+
+    assert result["activities"] == []
+
+
+def test_main_processes_batch_and_writes_failures_report(tmp_path):
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    (input_dir / "penguin.mp4").write_bytes(b"fake-video")
+    (input_dir / "penguin.srt").write_text(SRT_CONTENT, encoding="utf-8")
+
+    output_dir = tmp_path / "out"
+
+    with patch("run_pipeline.extract_frames", return_value=["frame1.jpg"]), patch(
+        "run_pipeline.MlxVlmBackend"
+    ) as mock_backend_cls:
+        mock_backend_cls.return_value = FakeBackend()
+        exit_code = main(
+            [
+                "--input-dir",
+                str(input_dir),
+                "--output-dir",
+                str(output_dir),
+                "--video-duration-sec",
+                "100.0",
+            ]
+        )
+
+    assert exit_code == 0
+    assert (output_dir / "penguin_activities.json").exists()
+    assert (output_dir / "failures.json").exists()
+    failures = json.loads((output_dir / "failures.json").read_text(encoding="utf-8"))
+    assert failures == []
