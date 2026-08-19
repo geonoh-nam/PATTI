@@ -133,3 +133,44 @@ def test_story_activities_only_attach_after_their_material():
     늦은_풀 = build_pool([point(150.0)], story)
     assert not [a for a in 이른_풀 if a.template == "사건의_순서_파악"]
     assert [a for a in 늦은_풀 if a.template == "사건의_순서_파악"]
+
+
+from pool_builder import PooledActivity, judge_status
+
+
+def pooled(question="빈칸에 알맞은 말을 골라보세요.", answer="나비", template="사물_첫글자_찾기",
+           options=None, confidence=0.9):
+    return PooledActivity(
+        id="a01", trigger_sec=20.0, age_tier="3-4", category="관찰_이해",
+        template=template, question=question, options=options or ["나비", "공"],
+        answer=answer, confidence=confidence, evidence="", evidence_times=[10.0],
+    )
+
+
+def test_clean_activity_stays_ready():
+    [judged] = judge_status([pooled()])
+    assert judged.status == "ready"
+    assert judged.rejected_reason is None
+
+
+def test_banned_word_in_question_sends_code_decided_activity_to_review():
+    [judged] = judge_status([pooled(question="괴물이 나타났을 때 무엇을 했나요?")])
+    assert judged.status == "review"
+    assert "괴물" in judged.rejected_reason
+
+
+def test_banned_word_in_options_is_caught_too():
+    [judged] = judge_status([pooled(options=["나비", "귀신"])])
+    assert judged.status == "review"
+
+
+def test_banned_word_in_model_decided_activity_asks_for_regeneration():
+    [judged] = judge_status([
+        pooled(template="이야기_핵심_주제", question="괴물을 이겨야 한다", confidence=0.7)
+    ])
+    assert judged.status == "regenerate"
+
+
+def test_judging_does_not_drop_anything():
+    pool = [pooled(), pooled(question="귀신이 나왔어요")]
+    assert len(judge_status(pool)) == 2

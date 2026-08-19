@@ -24,9 +24,13 @@ from activity_assembler import (
     make_spelling,
     make_theme,
 )
+from activity_dictionaries import BANNED_WORDS
 from scene_inventory import MergedScene, SceneInventory, merge_inventories
 from schemas import ACTIVITY_CATEGORY, TIER_OF_TEMPLATE, SubtitleSegment
 from story_material import StoryMaterial
+
+# 모델이 정답을 정하는 활동. 검증에 실패하면 재호출로 고칠 수 있다(계획 B).
+MODEL_DECIDED = {"이야기_핵심_주제", "원인과_결과"}
 
 
 @dataclass
@@ -143,3 +147,24 @@ def _assemble_one(
         *make_theme(story, trigger),
         *make_cause_effect(story, trigger),
     ]
+
+
+def judge_status(pool: list[PooledActivity]) -> list[PooledActivity]:
+    """금칙어를 검사해 상태를 판정한다. 아무것도 버리지 않는다 — 사유를 남긴다.
+
+    사실 일관성 검사는 없다. 코드 결정 활동은 정답이 구성상 유일하고,
+    모델 결정 활동은 재료 파싱 단계에서 이미 검증됐다.
+    """
+    for activity in pool:
+        hit = _banned_hit(activity)
+        if hit is None:
+            continue
+        activity.status = "regenerate" if activity.template in MODEL_DECIDED else "review"
+        activity.rejected_reason = f"금칙어 '{hit}' 이(가) 들어 있다"
+    return pool
+
+
+def _banned_hit(activity: PooledActivity) -> str | None:
+    """활동이 아이에게 보여주는 모든 문자열에서 금칙어를 찾는다."""
+    haystack = " ".join([activity.question, activity.answer, *(activity.options or [])])
+    return next((word for word in BANNED_WORDS if word in haystack), None)
