@@ -1,4 +1,4 @@
-from safe_point_detector import is_sentence_closed, find_raw_safe_points
+from safe_point_detector import is_sentence_closed, find_raw_safe_points, find_safe_points
 from schemas import SubtitleSegment
 
 
@@ -72,3 +72,54 @@ def test_uses_video_duration_as_silence_for_last_line():
 
 def test_returns_empty_for_no_segments():
     assert find_raw_safe_points([], video_duration_sec=10.0) == []
+
+
+def test_enforces_minimum_spacing_chronologically():
+    segments = [
+        seg("첫 대사야.", 20.0, 25.0),
+        seg("둘째 대사야.", 30.0, 35.0),   # 직전 채택과 10초 — 탈락
+        seg("셋째 대사야.", 50.0, 55.0),   # 직전 채택과 30초 — 채택
+    ]
+    points = find_safe_points(
+        segments, video_duration_sec=100.0, min_spacing_sec=20.0, edge_margin_sec=15.0
+    )
+    assert [p.timestamp_sec for p in points] == [25.0, 55.0]
+
+
+def test_excludes_points_inside_edge_margin():
+    segments = [
+        seg("너무 이른 대사야.", 0.0, 5.0),
+        seg("가운데 대사야.", 40.0, 45.0),
+        seg("너무 늦은 대사야.", 90.0, 95.0),
+    ]
+    points = find_safe_points(
+        segments, video_duration_sec=100.0, min_spacing_sec=1.0, edge_margin_sec=15.0
+    )
+    assert [p.timestamp_sec for p in points] == [45.0]
+
+
+def test_reason_states_the_computed_signal():
+    segments = [seg("첫 대사야.", 20.0, 25.0), seg("둘째 대사야.", 28.0, 30.0)]
+    points = find_safe_points(
+        segments, video_duration_sec=100.0, min_spacing_sec=1.0, edge_margin_sec=15.0
+    )
+    assert points[0].reason == "문장 완결 + 침묵 3.0초"
+
+
+def test_context_includes_two_preceding_lines():
+    segments = [
+        seg("첫째.", 16.0, 18.0),
+        seg("둘째.", 19.0, 21.0),
+        seg("셋째.", 22.0, 25.0),
+        seg("넷째.", 40.0, 45.0),
+    ]
+    points = find_safe_points(
+        segments, video_duration_sec=100.0, min_spacing_sec=1.0, edge_margin_sec=15.0
+    )
+    first = points[0]
+    assert [s.text for s in first.context_segments] == ["첫째.", "둘째.", "셋째."]
+
+
+def test_find_safe_points_returns_empty_for_no_segments():
+    # Task 2의 test_returns_empty_for_no_segments와 같은 파일이므로 이름이 겹치면 안 된다
+    assert find_safe_points([], video_duration_sec=100.0) == []
