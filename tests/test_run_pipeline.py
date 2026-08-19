@@ -43,11 +43,6 @@ class FakeBackend:
     """activity_generator의 비전 호출에 대해 활동 JSON을 돌려준다."""
 
     def generate(self, prompt, image_paths):
-        if not image_paths:
-            return json.dumps(
-                {"breakpoints": [{"timestamp_sec": 22.0, "reason": "펭귄 소개가 끝나는 지점"}]},
-                ensure_ascii=False,
-            )
         return json.dumps(
             {
                 "scene_description": "하얀 펭귄이 화면 중앙에 서 있다.",
@@ -158,6 +153,46 @@ def test_cli_exposes_silence_and_spacing_knobs(tmp_path):
         "--min-spacing-sec", "30.0",
     ]
     assert run_pipeline.main(argv) == 0
+
+
+def test_cli_wires_silence_and_spacing_to_find_safe_points(tmp_path, monkeypatch):
+    # 값을 서로 다르게 줘서(swap이 일어나면 걸리도록) main()이 find_safe_points에
+    # min_silence_sec/min_spacing_sec를 이름 그대로 전달하는지 검증한다.
+    import run_pipeline
+
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    (input_dir / "penguin.mp4").write_bytes(b"fake-video")
+    (input_dir / "penguin.srt").write_text(SRT_CONTENT, encoding="utf-8")
+
+    output_dir = tmp_path / "out"
+
+    recorded = {}
+
+    def fake_find_safe_points(segments, video_duration_sec, min_silence_sec, min_spacing_sec):
+        recorded["min_silence_sec"] = min_silence_sec
+        recorded["min_spacing_sec"] = min_spacing_sec
+        return []
+
+    monkeypatch.setattr(run_pipeline, "find_safe_points", fake_find_safe_points)
+
+    with patch("run_pipeline.extract_frames", return_value=["frame1.jpg"]), patch(
+        "run_pipeline.MlxVlmBackend"
+    ) as mock_backend_cls:
+        mock_backend_cls.return_value = FakeBackend()
+        exit_code = main(
+            [
+                "--input-dir", str(input_dir),
+                "--output-dir", str(output_dir),
+                "--age-range", "3-4",
+                "--video-duration-sec", "100.0",
+                "--min-silence-sec", "2.5",
+                "--min-spacing-sec", "33.0",
+            ]
+        )
+
+    assert exit_code == 0
+    assert recorded == {"min_silence_sec": 2.5, "min_spacing_sec": 33.0}
 
 
 def test_narrative_segmenter_module_is_gone():

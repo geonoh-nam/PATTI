@@ -23,7 +23,8 @@ def is_sentence_closed(text: str) -> bool:
         return False
     if stripped.endswith(SENTENCE_END_PUNCTUATION):
         return True
-    words = stripped.rstrip(".,!?~… ").split()
+    # 쉼표는 일부러 남긴다 — 뒤 문장과 이어지는 절이라는 가장 강한 신호이기 때문이다.
+    words = stripped.rstrip(".!?~… ").split()
     return bool(words) and words[-1].endswith(SENTENCE_END_SYLLABLES)
 
 

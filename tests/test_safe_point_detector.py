@@ -36,6 +36,11 @@ def test_treats_continuing_clause_as_open():
     assert not is_sentence_closed("이젠 내가")
 
 
+def test_treats_trailing_comma_as_open():
+    # 쉼표로 끝나면 뒤에 이어지는 절이 있다는 뜻이므로 완결로 보면 안 된다
+    assert not is_sentence_closed("그럼 우리 같이 가자,")
+
+
 def test_treats_empty_text_as_open():
     assert not is_sentence_closed("")
     assert not is_sentence_closed("   ")
@@ -129,6 +134,34 @@ def test_context_includes_two_preceding_lines():
 def test_find_safe_points_returns_empty_for_no_segments():
     # Task 2의 test_returns_empty_for_no_segments와 같은 파일이므로 이름이 겹치면 안 된다
     assert find_safe_points([], video_duration_sec=100.0) == []
+
+
+# 이 자막은 테스트 전용으로 직접 작성한 것이며, 저작권이 있는 tinyping 샘플에서 파생되지
+# 않았다. 뒤따르는 침묵이 없는 줄(2번), 문법적으로 다음 줄과 이어지는 줄("떴는데,", 3번),
+# 가장자리 여백(edge_margin=15.0)에 걸려 시작(10.0초)과 끝(107.0초) 양쪽에서 제외되는
+# 지점을 의도적으로 모두 포함한다.
+SYNTHETIC_STORY_SRT = Path(__file__).resolve().parent / "fixtures" / "synthetic_story.srt"
+SYNTHETIC_STORY_DURATION_SEC = 115.0
+
+
+def test_synthetic_story_raw_safe_points_match_pinned_baseline():
+    segments = parse_subtitle_file(str(SYNTHETIC_STORY_SRT))
+    raw = find_raw_safe_points(segments, SYNTHETIC_STORY_DURATION_SEC)
+    assert [ts for _, ts, _ in raw] == [10.0, 24.0, 41.0, 58.0, 76.0, 91.0, 107.0]
+    assert [silence for _, _, silence in raw] == [2.0, 6.0, 4.0, 7.0, 9.0, 9.0, 8.0]
+
+
+def test_synthetic_story_default_settings_match_pinned_baseline():
+    segments = parse_subtitle_file(str(SYNTHETIC_STORY_SRT))
+    points = find_safe_points(segments, SYNTHETIC_STORY_DURATION_SEC)
+    assert [p.timestamp_sec for p in points] == [24.0, 58.0, 91.0]
+
+
+def test_synthetic_story_tighter_spacing_yields_more_points():
+    # min_spacing_sec을 낮추면 실제로 채택되는 지점 수가 늘어난다는 것을 확인한다
+    segments = parse_subtitle_file(str(SYNTHETIC_STORY_SRT))
+    points = find_safe_points(segments, SYNTHETIC_STORY_DURATION_SEC, min_spacing_sec=10.0)
+    assert [p.timestamp_sec for p in points] == [24.0, 41.0, 58.0, 76.0, 91.0]
 
 
 TINYPING_SRT = Path(__file__).resolve().parents[2] / "pipeline_samples_tinyping" / "tinyping.srt"
