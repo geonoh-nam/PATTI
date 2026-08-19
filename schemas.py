@@ -55,6 +55,11 @@ TEMPLATES_BY_AGE_TIER = {
     },
 }
 
+# 활동 → 연령 티어 역방향 표. 카탈로그가 단일 출처이므로 손으로 적지 않는다.
+TIER_OF_TEMPLATE = {
+    name: tier for tier, names in TEMPLATES_BY_AGE_TIER.items() for name in names
+}
+
 ACTIVITY_CATEGORY = {
     "사물_첫글자_찾기": "글자_어휘",
     "같은_글자로_시작하는_낱말": "글자_어휘",
