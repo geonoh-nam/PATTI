@@ -15,24 +15,28 @@ SKT FLY AI 열정4팀 최종 프로젝트
 ① subtitle_parser        자막을 줄 단위로 파싱
         │
         ▼
-② scene_detector          ffmpeg scene-cut으로 실제 장면전환 시각 추출 (참고 정보)
+② scene_detector          ffmpeg scene-cut으로 실제 장면전환 시각 추출 (참고 정보, 로그에만 남음)
         │
         ▼
-③ narrative_segmenter     LLM(텍스트 전용) 호출 1회 — "서사가 마디를 짓는 지점"을 넓게 탐지
+③ event_boundary_detector CLIP 프레임 임베딩 거리로 사건 경계 후보 추출 (참고 정보, 로그에만 남음)
         │
         ▼
-④ frame_sampler           후보 지점마다 −1s/0s/+1s 프레임 3장 추출
+④ safe_point_detector     침묵 길이·문장 완결·간격만으로 안전 지점 판정 — 모델 호출 없음
         │
         ▼
-⑤ activity_generator      로컬 비전 LLM 호출 — 프레임 연속성 판단 + 활동(관찰/선택/움직임/언어/마무리) 생성
+⑤ frame_sampler           안전 지점마다 프레임 1장 추출
         │
         ▼
-⑥ post_filter             점수·간격·목표 개수(target-count)로 최종 선정
+⑥ activity_generator      로컬 비전 LLM 호출 — 활동(관찰/선택/움직임/언어/마무리) 생성
+        │
+        ▼
+⑦ post_filter             점수·간격·목표 개수(target-count)로 최종 선정
         │
         ▼
 [<video_id>_activities.json]
 ```
 
+②③은 아직 안전 지점 판정에 직접 반영되지 않고 로그로만 남는 참고 신호입니다. 실제 지점 선정은 ④가 자막 타이밍만으로 수행합니다.
 각 단계의 판단 근거(왜 이 지점을 골랐는지, 왜 제외됐는지)는 실행 로그와 출력 JSON에 함께 남습니다.
 
 ### 요구 사항
@@ -65,13 +69,18 @@ SKT FLY AI 열정4팀 최종 프로젝트
      --input-dir samples \
      --output-dir out \
      --topic "동물" \
-     --age-range 4-6 \
+     --age-range 5-6 \
      --video-duration-sec 123.4 \
-     --target-count 5
+     --target-count 5 \
+     --min-silence-sec 1.0 \
+     --min-spacing-sec 20.0
    ```
 
    `--input-dir` 폴더에 있는 모든 `.mp4`+`.srt`/`.vtt` 쌍을 순회하며 처리합니다. 영상 하나가 실패해도
    나머지는 계속 처리되고, 실패 목록은 `out/failures.json`에 남습니다.
+
+   `--age-range`는 `3-4`/`5-6`/`7` 중 하나만 허용됩니다. `--min-silence-sec`(안전 지점으로 인정할
+   최소 침묵 길이)와 `--min-spacing-sec`(활동 사이 최소 간격)는 값을 낮출수록 활동 후보가 늘어납니다.
 
 ### 출력
 
@@ -84,16 +93,16 @@ SKT FLY AI 열정4팀 최종 프로젝트
   "activities": [
     {
       "timestamp_sec": 21.7,
-      "type": "관찰",
+      "activity_template": "그림_단어_고르기",
       "question": "...",
       "options": null,
       "answer": null,
-      "difficulty": "easy",
       "source_subtitle_range": [12.0, 21.7],
       "score": 0.8,
-      "candidate_reason": "이 지점을 후보로 고른 이유 (narrative_segmenter)",
+      "candidate_reason": "이 지점을 후보로 고른 이유 (safe_point_detector)",
       "candidate_subtitle_text": "해당 지점 주변 자막 원문",
-      "activity_reason": "이 활동을 적합/생성한 이유 (activity_generator)"
+      "activity_reason": "이 활동을 적합/생성한 이유 (activity_generator)",
+      "scene_description": "이 시점 화면에 대한 설명 (activity_generator)"
     }
   ]
 }
@@ -105,18 +114,19 @@ SKT FLY AI 열정4팀 최종 프로젝트
 python3 -m pytest -v
 ```
 
-45개 단위 테스트가 있으며, ffmpeg·비전 모델 호출은 전부 모킹되어 있어 별도 설치 없이 실행됩니다.
+단위 테스트가 있으며, ffmpeg·비전 모델 호출은 전부 모킹되어 있어 별도 설치 없이 실행됩니다.
 
 ### 프로젝트 구조
 
 ```
-schemas.py             데이터클래스 정의
-subtitle_parser.py     SRT/VTT 파싱
-scene_detector.py      ffmpeg scene-cut 감지
-narrative_segmenter.py 후보 지점 탐지 (LLM, 텍스트 전용)
-frame_sampler.py       ffmpeg 프레임 추출
-activity_generator.py  활동 생성 (비전 LLM)
-post_filter.py         점수·간격·개수 기반 최종 선정
-run_pipeline.py         CLI 오케스트레이터
-tests/                  단위 테스트
+schemas.py               데이터클래스 정의
+subtitle_parser.py       SRT/VTT 파싱
+scene_detector.py        ffmpeg scene-cut 감지
+event_boundary_detector.py CLIP 임베딩 기반 사건 경계 후보 탐지
+safe_point_detector.py   안전 지점 탐지 (침묵·문장 완결·간격, 모델 호출 없음)
+frame_sampler.py         ffmpeg 프레임 추출
+activity_generator.py    활동 생성 (비전 LLM)
+post_filter.py           점수·간격·개수 기반 최종 선정
+run_pipeline.py          CLI 오케스트레이터
+tests/                    단위 테스트
 ```
