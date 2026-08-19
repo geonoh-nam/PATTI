@@ -74,3 +74,40 @@ def parse_scene_inventory(raw_json: str, 시각: float, context_text: str) -> Sc
         흉내말=_clean_mimetic(data.get("흉내말"), context_text),
         안전_플래그=[f for f in data.get("안전_플래그") or [] if f],
     )
+
+
+@dataclass
+class MergedScene:
+    주체들: list[str] = field(default_factory=list)
+    보이는_색: list[str] = field(default_factory=list)
+    셀_수_있는_것: list[tuple[str, int]] = field(default_factory=list)
+    다른_사물: list[str] = field(default_factory=list)
+    흉내말들: list[tuple[str, str]] = field(default_factory=list)
+    안전함: bool = True
+    재료_시각: list[float] = field(default_factory=list)
+
+
+def _dedup(values):
+    """순서를 유지하며 중복만 제거한다."""
+    seen = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return seen
+
+
+def merge_inventories(inventories: list[SceneInventory]) -> MergedScene:
+    """한 안전 지점이 받는 구간의 화면 목록을 합친다.
+
+    주체는 합치지 않고 각각 남긴다 — 주체가 여럿이면 이름·첫 글자·빠진 글자 활동이
+    각각 여러 벌 나오며, 이것이 풀 크기를 좌우한다.
+    """
+    return MergedScene(
+        주체들=_dedup(i.주체 for i in inventories),
+        보이는_색=_dedup(c for i in inventories for c in i.보이는_색),
+        셀_수_있는_것=_dedup(item for i in inventories for item in i.셀_수_있는_것),
+        다른_사물=_dedup(o for i in inventories for o in i.다른_사물),
+        흉내말들=_dedup(i.흉내말 for i in inventories if i.흉내말 is not None),
+        안전함=not any(i.안전_플래그 for i in inventories),
+        재료_시각=[i.시각 for i in inventories],
+    )
