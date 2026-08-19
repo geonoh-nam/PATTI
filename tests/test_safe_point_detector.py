@@ -116,8 +116,9 @@ def test_context_includes_two_preceding_lines():
     points = find_safe_points(
         segments, video_duration_sec=100.0, min_spacing_sec=1.0, edge_margin_sec=15.0
     )
-    first = points[0]
-    assert [s.text for s in first.context_segments] == ["첫째.", "둘째.", "셋째."]
+    # points[0]은 첫 자막 줄이라 앞선 줄이 없다(context는 자기 자신 1개).
+    # "앞 2줄 + 해당 줄" 규칙은 앞에 2줄이 실제로 존재하는 세 번째 채택 지점에서 검증한다.
+    assert [s.text for s in points[2].context_segments] == ["첫째.", "둘째.", "셋째."]
 
 
 def test_find_safe_points_returns_empty_for_no_segments():
