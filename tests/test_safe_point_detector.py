@@ -1,5 +1,10 @@
+from pathlib import Path
+
+import pytest
+
 from safe_point_detector import is_sentence_closed, find_raw_safe_points, find_safe_points
 from schemas import SubtitleSegment
+from subtitle_parser import parse_subtitle_file
 
 
 def seg(text, start, end):
@@ -124,3 +129,24 @@ def test_context_includes_two_preceding_lines():
 def test_find_safe_points_returns_empty_for_no_segments():
     # Task 2의 test_returns_empty_for_no_segments와 같은 파일이므로 이름이 겹치면 안 된다
     assert find_safe_points([], video_duration_sec=100.0) == []
+
+
+TINYPING_SRT = Path(__file__).resolve().parents[2] / "pipeline_samples_tinyping" / "tinyping.srt"
+TINYPING_DURATION_SEC = 354.0
+
+
+@pytest.mark.skipif(not TINYPING_SRT.exists(), reason="샘플 자막이 없는 환경")
+def test_tinyping_raw_safe_point_count_matches_measured_baseline():
+    segments = parse_subtitle_file(str(TINYPING_SRT))
+    raw = find_raw_safe_points(segments, TINYPING_DURATION_SEC, min_silence_sec=1.0)
+    inside = [ts for _, ts, _ in raw if 15.0 <= ts <= TINYPING_DURATION_SEC - 15.0]
+    assert len(inside) == 19
+
+
+@pytest.mark.skipif(not TINYPING_SRT.exists(), reason="샘플 자막이 없는 환경")
+def test_tinyping_default_spacing_yields_measured_baseline():
+    segments = parse_subtitle_file(str(TINYPING_SRT))
+    points = find_safe_points(segments, TINYPING_DURATION_SEC)
+    # 기본값(침묵 1초 / 간격 20초) 기준선. 현행 LLM 방식은 8개였다.
+    assert len(points) == 9
+    assert all(p.reason.startswith("문장 완결 + 침묵") for p in points)
