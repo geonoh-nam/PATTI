@@ -6,10 +6,19 @@
 
 from typing import NamedTuple
 
-from activity_dictionaries import COLOR_PALETTE, pick_distractor_mimetic
+from activity_dictionaries import (
+    ANTONYMS,
+    COLOR_PALETTE,
+    COMPOUND_WORDS,
+    VOWEL_CONFUSIONS,
+    find_antonym_source,
+    find_compound,
+    pick_distractor_mimetic,
+)
 from scene_inventory import MergedScene
 
 SCENE_CONFIDENCE = 0.9   # 질문 생성은 결정론이나 비전 인식 자체는 틀릴 수 있다
+TEXT_CONFIDENCE = 1.0    # 자막과 사전만 쓰므로 인식 오차가 없다
 
 
 class Activity(NamedTuple):
@@ -179,3 +188,80 @@ def make_mimetic(merged: MergedScene, context_text: str) -> list[Activity]:
             confidence=SCENE_CONFIDENCE,
         ))
     return activities
+
+
+_MEDIALS = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
+
+
+def _swap_medial(syllable: str, source: str, target: str) -> str | None:
+    """음절의 중성이 source면 target으로 바꾼 음절을 돌려준다. 아니면 None."""
+    code = ord(syllable) - _HANGUL_BASE
+    if not 0 <= code < 11172:
+        return None
+    initial, remainder = divmod(code, 588)
+    medial, final = divmod(remainder, 28)
+    if _MEDIALS[medial] != source or target not in _MEDIALS:
+        return None
+    return chr(_HANGUL_BASE + initial * 588 + _MEDIALS.index(target) * 28 + final)
+
+
+def _corrupt_spelling(word: str) -> str | None:
+    """혼동 모음 하나를 바꿔 틀린 표기를 만든다. 바꿀 자리가 없으면 None."""
+    for index, syllable in enumerate(word):
+        for source, target in VOWEL_CONFUSIONS:
+            swapped = _swap_medial(syllable, source, target)
+            if swapped is not None:
+                return word[:index] + swapped + word[index + 1 :]
+    return None
+
+
+def make_antonym(context_text: str, 시각: float) -> list[Activity]:
+    word = find_antonym_source(context_text)
+    if word is None:
+        return []
+    answer = ANTONYMS[word]
+    return [Activity(
+        template="반대말_찾기",
+        question=f"'{word}'와 반대되는 말을 골라보세요.",
+        options=[answer, word],
+        answer=answer,
+        evidence=f"자막에 등장한 '{word}'의 반대말을 사전에서 찾았다",
+        evidence_times=[시각],
+        confidence=TEXT_CONFIDENCE,
+    )]
+
+
+def make_spelling(context_text: str, 시각: float) -> list[Activity]:
+    for token in context_text.split():
+        cleaned = token.strip(".,!?~… '\"")
+        if len(cleaned) < 2:
+            continue
+        wrong = _corrupt_spelling(cleaned)
+        if wrong is None:
+            continue
+        return [Activity(
+            template="올바른_낱말_찾기",
+            question="바르게 쓴 낱말을 골라보세요.",
+            options=[cleaned, wrong],
+            answer=cleaned,
+            evidence=f"자막의 '{cleaned}'에서 혼동 모음을 바꿔 오답 '{wrong}'을 만들었다",
+            evidence_times=[시각],
+            confidence=TEXT_CONFIDENCE,
+        )]
+    return []
+
+
+def make_compound(context_text: str, 시각: float) -> list[Activity]:
+    whole = find_compound(context_text)
+    if whole is None:
+        return []
+    left, right = COMPOUND_WORDS[whole]
+    return [Activity(
+        template="두_낱말_합치기",
+        question=f"'{left}'과(와) '{right}'을(를) 합치면 어떤 낱말이 될까요?",
+        options=[whole, right + left],
+        answer=whole,
+        evidence=f"자막에 등장한 합성어 '{whole}'을 두 낱말로 나눴다",
+        evidence_times=[시각],
+        confidence=TEXT_CONFIDENCE,
+    )]

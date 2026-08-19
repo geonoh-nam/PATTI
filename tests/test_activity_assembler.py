@@ -125,3 +125,52 @@ def test_mimetic_distractor_is_from_another_category():
 
 def test_mimetic_is_empty_without_a_choice():
     assert make_mimetic(scene(흉내말들=[]), "공이 굴러갔어요.") == []
+
+
+from activity_assembler import make_antonym, make_compound, make_spelling
+
+
+def test_antonym_answers_with_the_opposite():
+    acts = make_antonym("코끼리는 정말 크다.", 시각=20.0)
+    assert len(acts) == 1
+    act = acts[0]
+    assert act.template == "반대말_찾기"
+    assert "크다" in act.question
+    assert act.answer == "작다"
+    assert act.confidence == 1.0
+    assert act.evidence_times == [20.0]
+
+
+def test_antonym_is_empty_without_a_dictionary_word():
+    assert make_antonym("오늘은 학교에 갔어요.", 시각=20.0) == []
+
+
+def test_spelling_offers_a_real_and_a_corrupted_form():
+    act = make_spelling("레몬 주세요.", 시각=20.0)[0]
+    assert act.template == "올바른_낱말_찾기"
+    assert act.answer == "레몬"
+    wrong = [o for o in act.options if o != act.answer][0]
+    assert wrong == "래몬"              # ㅔ → ㅐ 치환
+    assert len(wrong) == len("레몬")
+
+
+def test_spelling_uses_the_first_corruptible_word():
+    # "노란"의 ㅗ가 "레몬"의 ㅔ보다 앞서므로 "노란"이 선택된다
+    act = make_spelling("노란 레몬을 먹었어요.", 시각=20.0)[0]
+    assert act.answer == "노란"
+    assert "누란" in act.options
+
+
+def test_spelling_is_empty_without_a_confusable_word():
+    assert make_spelling("우리 집", 시각=20.0) == []
+
+
+def test_compound_asks_for_the_whole_word():
+    act = make_compound("마당에 눈사람을 만들었어요.", 시각=20.0)[0]
+    assert act.template == "두_낱말_합치기"
+    assert "눈" in act.question and "사람" in act.question
+    assert act.answer == "눈사람"
+
+
+def test_compound_is_empty_without_a_compound_word():
+    assert make_compound("오늘은 학교에 갔어요.", 시각=20.0) == []
