@@ -4,14 +4,13 @@ from pathlib import Path
 
 from activity_generator import MlxVlmBackend, generate_activity
 from event_boundary_detector import ClipEmbedder, detect_prediction_error_boundaries
-from narrative_segmenter import find_narrative_beats
 from frame_sampler import extract_frames
 from post_filter import filter_and_cap
+from safe_point_detector import find_safe_points
 from scene_detector import detect_scene_cuts
 from subtitle_parser import parse_subtitle_file
 
 SUBTITLE_EXTENSIONS = (".srt", ".vtt")
-STAGE1_MIN_SPACING_SEC = 5.0
 CLIP_INTERVAL_SEC = 1.0
 CLIP_TOP_K = 20
 MERGE_TOLERANCE_SEC = 0.5
@@ -52,6 +51,8 @@ def run_for_video(
     video_duration_sec: float,
     target_count: int,
     clip_embedder,
+    min_silence_sec: float,
+    min_spacing_sec: float,
 ) -> dict:
     result = {
         "video_id": video_id,
@@ -86,14 +87,12 @@ def run_for_video(
         visual_cuts = merge_visual_signals(scene_cuts, clip_boundaries)
         print(f"[{video_id}] 합산된 시각 신호 {len(visual_cuts)}개: {[round(t, 1) for t in visual_cuts]}")
 
-        print(f"[{video_id}] 내러티브 마디 탐지 중 (LLM 호출 1회, 1차 후보는 최대한 넓게)...")
-        candidates = find_narrative_beats(
+        print(f"[{video_id}] 안전 지점 탐지 중 (침묵·문장 완결·간격, 모델 호출 없음)...")
+        candidates = find_safe_points(
             segments,
             video_duration_sec=video_duration_sec,
-            video_meta=video_meta,
-            backend=backend,
-            scene_cuts=visual_cuts,
-            min_spacing_sec=STAGE1_MIN_SPACING_SEC,
+            min_silence_sec=min_silence_sec,
+            min_spacing_sec=min_spacing_sec,
         )
         print(f"[{video_id}] 후보 지점 {len(candidates)}개")
         for c in candidates:
@@ -182,6 +181,18 @@ def main(argv: list[str] | None = None) -> int:
         default=5,
         help="영상당 최종 생성할 활동 개수. 1차 후보는 이보다 훨씬 넓게 뽑고, 비전 판정을 통과한 것 중 점수 상위 N개만 최종 선정한다.",
     )
+    parser.add_argument(
+        "--min-silence-sec",
+        type=float,
+        default=1.0,
+        help="안전 지점으로 인정할 최소 침묵 길이(초). 자막이 끝난 뒤 다음 자막까지의 공백.",
+    )
+    parser.add_argument(
+        "--min-spacing-sec",
+        type=float,
+        default=20.0,
+        help="활동 사이 최소 간격(초). 값을 낮추면 후보가 늘어난다.",
+    )
     args = parser.parse_args(argv)
 
     pairs = discover_video_subtitle_pairs(args.input_dir)
@@ -204,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
                 video_duration_sec=args.video_duration_sec,
                 target_count=args.target_count,
                 clip_embedder=clip_embedder,
+                min_silence_sec=args.min_silence_sec,
+                min_spacing_sec=args.min_spacing_sec,
             )
         except Exception as exc:  # noqa: BLE001 - 배치 전체가 멈추지 않도록 광범위하게 잡는다
             print(f"[{video_id}] 실패: {exc}")

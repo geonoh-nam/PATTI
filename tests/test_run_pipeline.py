@@ -40,8 +40,7 @@ def test_discover_video_subtitle_pairs_matches_by_basename(tmp_path):
 
 
 class FakeBackend:
-    """image_paths가 비어있으면(narrative_segmenter의 텍스트 전용 호출) breakpoints를,
-    아니면(activity_generator의 비전 호출) 활동 JSON을 돌려준다."""
+    """activity_generator의 비전 호출에 대해 활동 JSON을 돌려준다."""
 
     def generate(self, prompt, image_paths):
         if not image_paths:
@@ -79,6 +78,8 @@ def test_run_for_video_produces_valid_activities_dict(tmp_path):
             video_duration_sec=100.0,
             target_count=5,
             clip_embedder=None,
+            min_silence_sec=1.0,
+            min_spacing_sec=20.0,
         )
 
     assert result["video_id"] == "penguin"
@@ -104,6 +105,8 @@ def test_run_for_video_skips_gracefully_on_bad_subtitle(tmp_path):
         video_duration_sec=100.0,
         target_count=5,
         clip_embedder=None,
+        min_silence_sec=1.0,
+        min_spacing_sec=20.0,
     )
 
     assert result["activities"] == []
@@ -139,3 +142,29 @@ def test_main_processes_batch_and_writes_failures_report(tmp_path):
     assert (output_dir / "failures.json").exists()
     failures = json.loads((output_dir / "failures.json").read_text(encoding="utf-8"))
     assert failures == []
+
+
+def test_cli_exposes_silence_and_spacing_knobs(tmp_path):
+    import run_pipeline
+
+    # 빈 입력 디렉토리이므로 모델은 로드되지 않는다(백엔드는 지연 로딩).
+    # 출력은 tmp_path로 보내 저장소에 파일을 남기지 않는다.
+    argv = [
+        "--input-dir", str(tmp_path / "in"),
+        "--output-dir", str(tmp_path / "out"),
+        "--age-range", "5-6",
+        "--video-duration-sec", "100",
+        "--min-silence-sec", "2.0",
+        "--min-spacing-sec", "30.0",
+    ]
+    assert run_pipeline.main(argv) == 0
+
+
+def test_narrative_segmenter_module_is_gone():
+    import importlib
+
+    try:
+        importlib.import_module("narrative_segmenter")
+    except ModuleNotFoundError:
+        return
+    raise AssertionError("narrative_segmenter는 삭제되어야 한다")
