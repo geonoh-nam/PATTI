@@ -19,6 +19,11 @@ PROMPT_TEMPLATE = """당신은 아동용 영상 학습 콘텐츠 기획자입니
 특히 다음 자막 줄이 지금 줄과 문법적으로 이어지는 하나의 문장이나 동작이면
 (예: "이젠 내가" 다음 줄이 "해내겠어"처럼 한 문장이 두 줄로 나뉜 경우) 그 사이는 절대 고르지 마세요.
 "(장면전환)" 표시가 붙은 줄 근처를 우선적으로 고려하되, 표시가 없다고 후보에서 무조건 제외하지는 마세요.
+
+목록을 처음부터 끝까지 한 줄씩 순서대로 검토하세요. 조건에 맞는 지점은 하나도 빠짐없이 전부
+breakpoints에 포함해야 합니다. 가장 확신이 드는 지점 한두 개만 고르고 멈추지 마세요 — 영상 전체에
+걸쳐 조건을 만족하는 지점이 여러 개 있다면 전부 후보로 내야 합니다. 최종 선별은 이후 별도 단계에서
+하므로, 지금 단계에서는 넓게 뽑는 것이 목표입니다.
 고른 지점마다 왜 그 지점을 선택했는지, 특히 다음 줄과 이어지지 않는 이유를 한 문장으로 함께 적으세요.
 
 응답 형식: {{"breakpoints": [{{"timestamp_sec": 22.0, "reason": "..."}}, {{"timestamp_sec": 43.7, "reason": "..."}}]}}
@@ -44,6 +49,15 @@ def build_segmenter_prompt(
     return PROMPT_TEMPLATE.format(topic=video_meta.get("topic", "미지정"), lines=lines)
 
 
+def _repair_truncated_outer_brace(raw_json: str) -> str:
+    """소형 모델이 breakpoints 배열은 닫고(']') 바깥 객체의 닫는 중괄호를 빠뜨린 채
+    EOS를 내는 경우가 있어, 그 패턴이면 닫는 중괄호를 보충한다."""
+    stripped = raw_json.rstrip()
+    if stripped.endswith("]") and not stripped.endswith("]}"):
+        return stripped + "}"
+    return raw_json
+
+
 def parse_beats_response(
     raw_json: str,
     segments: list[SubtitleSegment],
@@ -53,8 +67,11 @@ def parse_beats_response(
 ) -> list[CandidatePoint]:
     try:
         data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"내러티브 마디 응답이 JSON이 아닙니다: {exc}") from exc
+    except json.JSONDecodeError:
+        try:
+            data = json.loads(_repair_truncated_outer_brace(raw_json))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"내러티브 마디 응답이 JSON이 아닙니다: {exc}") from exc
 
     if "breakpoints" not in data:
         raise ValueError("필수 필드(breakpoints)가 없습니다")

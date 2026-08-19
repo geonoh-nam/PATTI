@@ -1,4 +1,4 @@
-from schemas import SubtitleSegment, CandidatePoint, ActivityCandidate, ACTIVITY_TYPES, DIFFICULTIES
+from schemas import SubtitleSegment, CandidatePoint, ActivityCandidate, ACTIVITY_TEMPLATES, AGE_DIFFICULTY_GUIDANCE
 
 
 def test_subtitle_segment_fields():
@@ -22,11 +22,21 @@ def test_activity_candidate_defaults_to_unsuitable_fields_none():
         timestamp_sec=2.5,
         source_subtitle_range=(1.0, 2.5),
     )
-    assert ac.type is None
+    assert ac.activity_template is None
     assert ac.question is None
     assert ac.options is None
+    assert ac.scene_description is None
 
 
-def test_activity_types_and_difficulties_are_fixed_sets():
-    assert ACTIVITY_TYPES == {"관찰", "선택", "움직임", "언어", "마무리"}
-    assert DIFFICULTIES == {"easy", "medium", "hard"}
+def test_activity_templates_is_a_single_unified_catalog():
+    # 연령별로 나뉘지 않은 단일 카탈로그 — 모든 연령대가 같은 목록을 본다
+    assert len(ACTIVITY_TEMPLATES) > 0
+    for name, description in ACTIVITY_TEMPLATES.items():
+        assert isinstance(name, str) and name
+        assert isinstance(description, str) and description
+
+
+def test_age_difficulty_guidance_covers_three_fixed_tiers():
+    assert set(AGE_DIFFICULTY_GUIDANCE.keys()) == {"3-4", "5-6", "7"}
+    for tier, guidance in AGE_DIFFICULTY_GUIDANCE.items():
+        assert isinstance(guidance, str) and guidance

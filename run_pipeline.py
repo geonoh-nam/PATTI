@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from activity_generator import MlxVlmBackend, generate_activity
+from event_boundary_detector import ClipEmbedder, detect_prediction_error_boundaries
 from narrative_segmenter import find_narrative_beats
 from frame_sampler import extract_frames
 from post_filter import filter_and_cap
@@ -11,6 +12,21 @@ from subtitle_parser import parse_subtitle_file
 
 SUBTITLE_EXTENSIONS = (".srt", ".vtt")
 STAGE1_MIN_SPACING_SEC = 5.0
+CLIP_INTERVAL_SEC = 1.0
+CLIP_TOP_K = 20
+MERGE_TOLERANCE_SEC = 0.5
+
+
+def merge_visual_signals(scene_cuts: list[float], clip_boundaries: list[float]) -> list[float]:
+    """ffmpeg scene-cut과 CLIP 예측오차 후보를 합치고, 서로 MERGE_TOLERANCE_SEC 이내로
+    가까운 값은 중복으로 보고 하나만 남긴다."""
+    merged = sorted(scene_cuts + clip_boundaries)
+    deduped: list[float] = []
+    for ts in merged:
+        if deduped and ts - deduped[-1] <= MERGE_TOLERANCE_SEC:
+            continue
+        deduped.append(ts)
+    return deduped
 
 
 def discover_video_subtitle_pairs(input_dir: str) -> list[tuple[str, str, str]]:
@@ -35,6 +51,7 @@ def run_for_video(
     backend,
     video_duration_sec: float,
     target_count: int,
+    clip_embedder,
 ) -> dict:
     result = {
         "video_id": video_id,
@@ -54,13 +71,28 @@ def run_for_video(
         scene_cuts = detect_scene_cuts(video_path)
         print(f"[{video_id}] 장면 전환 {len(scene_cuts)}개 감지: {[round(t, 1) for t in scene_cuts]}")
 
+        print(f"[{video_id}] 사건 경계 후보 감지 중 (CLIP 프레임 임베딩 거리, EST 예측오차 근사)...")
+        clip_frames_dir = str(Path(output_dir) / f"{video_id}_clip_frames")
+        clip_boundaries = detect_prediction_error_boundaries(
+            video_path,
+            video_duration_sec=video_duration_sec,
+            embedder=clip_embedder,
+            output_dir=clip_frames_dir,
+            interval_sec=CLIP_INTERVAL_SEC,
+            top_k=CLIP_TOP_K,
+        )
+        print(f"[{video_id}] CLIP 후보 {len(clip_boundaries)}개: {[round(t, 1) for t in clip_boundaries]}")
+
+        visual_cuts = merge_visual_signals(scene_cuts, clip_boundaries)
+        print(f"[{video_id}] 합산된 시각 신호 {len(visual_cuts)}개: {[round(t, 1) for t in visual_cuts]}")
+
         print(f"[{video_id}] 내러티브 마디 탐지 중 (LLM 호출 1회, 1차 후보는 최대한 넓게)...")
         candidates = find_narrative_beats(
             segments,
             video_duration_sec=video_duration_sec,
             video_meta=video_meta,
             backend=backend,
-            scene_cuts=scene_cuts,
+            scene_cuts=visual_cuts,
             min_spacing_sec=STAGE1_MIN_SPACING_SEC,
         )
         print(f"[{video_id}] 후보 지점 {len(candidates)}개")
@@ -78,17 +110,22 @@ def run_for_video(
         for candidate in candidates:
             ts = candidate.timestamp_sec
             print(f"[{video_id}]   {ts}s: 프레임 추출 중...")
-            frame_paths = extract_frames(video_path, ts, frames_dir)
+            # 이미지 여러 장(전/후 비교용)을 한 번에 넣으면 모델이 화면 대신 자막 내용으로
+            # 그럴듯한 장면을 상상해버리는 현상이 재현 확인됨(단일 이미지에서는 정확했음).
+            # 연속성 판단 기준도 이미 제거된 상태라 여러 장을 쓸 이유가 없어 1장만 사용한다.
+            frame_paths = extract_frames(video_path, ts, frames_dir, offsets=(0.0,))
             print(f"[{video_id}]   {ts}s: 프레임 {len(frame_paths)}장, 활동 생성 중...")
             activity = generate_activity(candidate, frame_paths, video_meta, backend)
             if activity is None:
                 print(f"[{video_id}]   {ts}s: 스킵 (응답 검증 실패)")
             elif not activity.is_suitable:
+                print(f"[{video_id}]   {ts}s: 화면 설명 — {activity.scene_description}")
                 print(f"[{video_id}]   {ts}s: 부적합 판정 (score={activity.score}) — 이유: {activity.reason}")
                 generated.append(activity)
             else:
+                print(f"[{video_id}]   {ts}s: 화면 설명 — {activity.scene_description}")
                 print(
-                    f"[{video_id}]   {ts}s: 채택 (type={activity.type}, score={activity.score}, "
+                    f"[{video_id}]   {ts}s: 채택 (template={activity.activity_template}, score={activity.score}, "
                     f"question={activity.question!r}) — 이유: {activity.reason}"
                 )
                 generated.append(activity)
@@ -100,16 +137,16 @@ def run_for_video(
         result["activities"] = [
             {
                 "timestamp_sec": a.timestamp_sec,
-                "type": a.type,
+                "activity_template": a.activity_template,
                 "question": a.question,
                 "options": a.options,
                 "answer": a.answer,
-                "difficulty": a.difficulty,
                 "source_subtitle_range": list(a.source_subtitle_range),
                 "score": a.score,
                 "candidate_reason": reason_by_ts.get(a.timestamp_sec),
                 "candidate_subtitle_text": context_text_by_ts.get(a.timestamp_sec),
                 "activity_reason": a.reason,
+                "scene_description": a.scene_description,
             }
             for a in final_activities
         ]
@@ -127,7 +164,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-dir", required=True, help="video(.mp4)+subtitle(.srt/.vtt) 쌍이 있는 디렉토리")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--topic", default="미지정")
-    parser.add_argument("--age-range", default="미지정")
+    parser.add_argument(
+        "--age-range",
+        required=True,
+        choices=["3-4", "5-6", "7"],
+        help="아동 연령대 티어. 영상 하나당 하나의 티어로 고정되며, 해당 티어의 활동 템플릿만 사용된다.",
+    )
     parser.add_argument(
         "--video-duration-sec",
         type=float,
@@ -145,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     pairs = discover_video_subtitle_pairs(args.input_dir)
     print(f"영상 {len(pairs)}개 발견: {[video_id for _, _, video_id in pairs]}")
     backend = MlxVlmBackend()
+    clip_embedder = ClipEmbedder()
     video_meta = {"topic": args.topic, "age_range": args.age_range}
 
     failures = []
@@ -160,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 backend=backend,
                 video_duration_sec=args.video_duration_sec,
                 target_count=args.target_count,
+                clip_embedder=clip_embedder,
             )
         except Exception as exc:  # noqa: BLE001 - 배치 전체가 멈추지 않도록 광범위하게 잡는다
             print(f"[{video_id}] 실패: {exc}")

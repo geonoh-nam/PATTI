@@ -8,7 +8,7 @@ def make(ts, score, is_suitable=True):
         score=score,
         timestamp_sec=ts,
         source_subtitle_range=(ts - 2, ts),
-        type="관찰" if is_suitable else None,
+        activity_template="색_찾기" if is_suitable else None,
         question="q" if is_suitable else None,
     )
 

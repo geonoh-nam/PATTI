@@ -2,7 +2,17 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from run_pipeline import discover_video_subtitle_pairs, run_for_video, main
+from run_pipeline import discover_video_subtitle_pairs, run_for_video, main, merge_visual_signals
+
+
+def test_merge_visual_signals_dedupes_close_values():
+    result = merge_visual_signals(scene_cuts=[10.0, 30.0], clip_boundaries=[10.2, 50.0])
+    assert result == [10.0, 30.0, 50.0]
+
+
+def test_merge_visual_signals_keeps_distinct_values_sorted():
+    result = merge_visual_signals(scene_cuts=[30.0, 10.0], clip_boundaries=[20.0])
+    assert result == [10.0, 20.0, 30.0]
 
 
 SRT_CONTENT = """1
@@ -40,7 +50,14 @@ class FakeBackend:
                 ensure_ascii=False,
             )
         return json.dumps(
-            {"is_suitable": True, "score": 0.9, "type": "관찰", "question": "무엇을 봤나요?"},
+            {
+                "scene_description": "하얀 펭귄이 화면 중앙에 서 있다.",
+                "is_suitable": True,
+                "score": 0.9,
+                "activity_template": "색_찾기",
+                "question": "무엇을 봤나요?",
+                "answer": "하양",
+            },
             ensure_ascii=False,
         )
 
@@ -56,11 +73,12 @@ def test_run_for_video_produces_valid_activities_dict(tmp_path):
             video_path=str(video_path),
             subtitle_path=str(subtitle_path),
             video_id="penguin",
-            video_meta={"topic": "동물", "age_range": "4-6"},
+            video_meta={"topic": "동물", "age_range": "3-4"},
             output_dir=str(tmp_path / "out"),
             backend=FakeBackend(),
             video_duration_sec=100.0,
             target_count=5,
+            clip_embedder=None,
         )
 
     assert result["video_id"] == "penguin"
@@ -85,6 +103,7 @@ def test_run_for_video_skips_gracefully_on_bad_subtitle(tmp_path):
         backend=FakeBackend(),
         video_duration_sec=100.0,
         target_count=5,
+        clip_embedder=None,
     )
 
     assert result["activities"] == []
@@ -110,6 +129,8 @@ def test_main_processes_batch_and_writes_failures_report(tmp_path):
                 str(output_dir),
                 "--video-duration-sec",
                 "100.0",
+                "--age-range",
+                "3-4",
             ]
         )
 

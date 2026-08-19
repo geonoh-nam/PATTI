@@ -120,6 +120,16 @@ def test_parse_beats_response_builds_context_from_surrounding_segments():
     assert context_texts == ["아기 고래를 너무 사랑해서", "항상 곁을 떠나지 않은대", "전설이 사실이었구나"]
 
 
+def test_parse_beats_response_repairs_truncated_outer_brace():
+    # 소형 모델이 배열은 닫고([...]) 바깥 객체의 닫는 중괄호를 빠뜨린 채 EOS를 내는 경우가 있다
+    segments = make_segments()
+    raw = '{"breakpoints": [{"timestamp_sec": 11.7, "reason": "이유"}]'
+
+    result = parse_beats_response(raw, segments, video_duration_sec=100.0, min_spacing_sec=0.0, edge_margin_sec=0.0)
+
+    assert [c.timestamp_sec for c in result] == [11.7]
+
+
 def test_parse_beats_response_rejects_malformed_json():
     segments = make_segments()
     with pytest.raises(ValueError):
