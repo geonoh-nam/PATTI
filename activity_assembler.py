@@ -10,6 +10,7 @@ from activity_dictionaries import (
     ANTONYMS,
     COLOR_PALETTE,
     COMPOUND_WORDS,
+    counter_for,
     VOWEL_CONFUSIONS,
     find_antonym_source,
     find_compound,
@@ -44,7 +45,8 @@ def make_color(merged: MergedScene) -> list[Activity]:
     if not absent:
         return []
 
-    answer = absent[0]
+    # 늘 팔레트 첫 색을 고르면 아이가 정답을 외운다 — 재료 시각으로 결정론적으로 회전시킨다
+    answer = absent[int(sum(merged.재료_시각)) % len(absent)]
     return [Activity(
         template="색_찾기",
         question="이 화면에 없는 색깔은 무엇일까요?",
@@ -60,11 +62,12 @@ def make_count(merged: MergedScene) -> list[Activity]:
     activities = []
     for name, count in merged.셀_수_있는_것:
         wrong = count + 1 if count < 5 else count - 1
+        counter = counter_for(name)
         activities.append(Activity(
             template="수량_확인",
-            question=f"{name}은(는) 모두 몇 개인가요?",
-            options=[f"{count}개", f"{wrong}개"],
-            answer=f"{count}개",
+            question=f"{name}{topic_particle(name)} 모두 몇 {counter}인가요?",
+            options=[f"{count}{counter}", f"{wrong}{counter}"],
+            answer=f"{count}{counter}",
             evidence=f"화면 목록이 보고한 '{name}' {count}개를 그대로 썼다",
             evidence_times=list(merged.재료_시각),
             confidence=SCENE_CONFIDENCE,
@@ -114,6 +117,14 @@ def initial_of(syllable: str) -> str | None:
     """한글 음절의 초성. 한글이 아니면 None."""
     code = ord(syllable) - _HANGUL_BASE
     return _INITIALS[code // 588] if 0 <= code < 11172 else None
+
+
+def topic_particle(word: str) -> str:
+    """낱말에 붙는 주제 조사. 받침이 있으면 '은', 없으면 '는'."""
+    code = ord(word[-1]) - _HANGUL_BASE
+    if not 0 <= code < 11172:
+        return "는"
+    return "은" if code % 28 else "는"
 
 
 def make_first_letter(merged: MergedScene) -> list[Activity]:
@@ -182,7 +193,11 @@ def make_mimetic(merged: MergedScene, context_text: str) -> list[Activity]:
     for word, modifies in merged.흉내말들:
         if modifies not in context_text:
             continue
-        blanked = context_text.replace(modifies, "____ " + modifies, 1)
+        if word in context_text:
+            # 자막이 이미 그 말을 쓰고 있으면 새 빈칸을 끼울 게 아니라 그 자리를 가려야 한다
+            blanked = context_text.replace(word, "____", 1)
+        else:
+            blanked = context_text.replace(modifies, "____ " + modifies, 1)
         activities.append(Activity(
             template="흉내_내는_말_이해",
             question=f"빈칸에 알맞은 말을 골라보세요.\n{blanked}",
@@ -299,7 +314,7 @@ def make_event_order(story: StoryMaterial, trigger_sec: float) -> list[Activity]
 def make_recall(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
     return [Activity(
         template="이야기_되새기기",
-        question=f"이야기에서 {intent.인물}은(는) 무엇을 하려고 했나요?",
+        question=f"이야기에서 {intent.인물}{topic_particle(intent.인물)} 무엇을 하려고 했나요?",
         options=[intent.하려던_행동, intent.다른_행동],
         answer=intent.하려던_행동,
         evidence=f"{intent.시각}초 자막에서 인물의 의도를 뽑았다",
@@ -311,7 +326,7 @@ def make_recall(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
 def make_emotion(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
     return [Activity(
         template="감정_추론",
-        question=f"{cue.근거_자막} {cue.인물}의 마음은 어떨까요?",
+        question=f"{cue.근거_자막}\n이때 {cue.인물}의 마음은 어떨까요?",
         options=[cue.감정, pick_distractor_emotion(cue.감정)],
         answer=cue.감정,
         evidence=f"{cue.시각}초 자막 '{cue.근거_자막}'을 근거로 삼았다",

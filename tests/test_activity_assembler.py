@@ -29,14 +29,14 @@ def test_color_is_deterministic_and_empty_without_colors():
 
 def test_count_makes_one_activity_per_countable_item():
     acts = make_count(scene(개수=[("나비", 3), ("나무", 2)]))
-    assert [a.answer for a in acts] == ["3개", "2개"]
+    assert [a.answer for a in acts] == ["3마리", "2개"]   # 나비는 마리, 나무는 개
     assert all(a.template == "수량_확인" for a in acts)
     assert "나비" in acts[0].question and "나무" in acts[1].question
 
 
 def test_count_offers_a_neighbouring_number_as_distractor():
     act = make_count(scene(개수=[("나비", 3)]))[0]
-    assert set(act.options) == {"3개", "4개"}
+    assert set(act.options) == {"3마리", "4마리"}
     act5 = make_count(scene(개수=[("별", 5)]))[0]
     assert set(act5.options) == {"5개", "4개"}
 
@@ -257,3 +257,50 @@ def test_cause_effect_asks_for_the_cause_of_a_past_result():
 
 def test_cause_effect_respects_the_trigger_boundary():
     assert make_cause_effect(story(), trigger_sec=100.0) == []
+
+
+# ── 구현 후 보정 4건 ───────────────────────────────────────────────────────
+
+from activity_assembler import topic_particle
+
+
+def test_mimetic_blanks_the_word_itself_when_the_subtitle_already_has_it():
+    context = "노란 나비가 훨훨 날아갔어요."
+    act = make_mimetic(scene(흉내말들=[("훨훨", "날아갔어요")]), context)[0]
+    assert "훨훨" not in act.question      # 정답이 자막에 있으면 그 자리를 빈칸으로 만든다
+    assert "____ 날아갔어요" in act.question
+    assert act.answer == "훨훨"
+
+
+def test_topic_particle_follows_the_final_consonant():
+    assert topic_particle("나비") == "는"
+    assert topic_particle("친구들") == "은"
+
+
+def test_count_uses_the_right_counter_and_particle():
+    act = make_count(scene(개수=[("나비", 3)]))[0]
+    assert act.question == "나비는 모두 몇 마리인가요?"
+    assert set(act.options) == {"3마리", "4마리"}
+    assert act.answer == "3마리"
+
+    사물 = make_count(scene(개수=[("공", 2)]))[0]
+    assert 사물.question == "공은 모두 몇 개인가요?"
+    assert 사물.answer == "2개"
+
+
+def test_recall_question_has_no_bare_particle_placeholder():
+    act = make_recall(story(), trigger_sec=100.0)[0]
+    assert "은(는)" not in act.question
+    assert "할머니는" in act.question
+
+
+def test_color_answer_rotates_with_the_material_time():
+    앞 = make_color(scene(색=["노란색"], 시각=[9.0]))[0]
+    뒤 = make_color(scene(색=["노란색"], 시각=[10.0]))[0]
+    assert 앞.answer != 뒤.answer          # 늘 팔레트 첫 색이면 아이가 정답을 외운다
+    assert 앞.answer not in ["노란색"] and 뒤.answer not in ["노란색"]
+
+
+def test_emotion_question_separates_the_quote_from_the_question():
+    act = make_emotion(story(), trigger_sec=150.0)[0]
+    assert act.question == "구름다리가 무너졌다\n이때 민수의 마음은 어떨까요?"
