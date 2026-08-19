@@ -13,12 +13,17 @@ from activity_dictionaries import (
     VOWEL_CONFUSIONS,
     find_antonym_source,
     find_compound,
+    pick_distractor_emotion,
     pick_distractor_mimetic,
 )
 from scene_inventory import MergedScene
+from story_material import StoryMaterial
 
 SCENE_CONFIDENCE = 0.9   # 질문 생성은 결정론이나 비전 인식 자체는 틀릴 수 있다
 TEXT_CONFIDENCE = 1.0    # 자막과 사전만 쓰므로 인식 오차가 없다
+MODEL_CONFIDENCE = 0.7   # 모델이 정답을 정하는 활동
+ORDER_LABELS = ["ㄱ", "ㄴ", "ㄷ"]
+THEME_MIN_EVENT_RATIO = 0.6   # 사건의 이만큼이 지나야 주제를 물을 수 있다
 
 
 class Activity(NamedTuple):
@@ -265,3 +270,96 @@ def make_compound(context_text: str, 시각: float) -> list[Activity]:
         evidence_times=[시각],
         confidence=TEXT_CONFIDENCE,
     )]
+
+
+def make_event_order(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
+    """사건 3개를 순서대로 놓게 한다. 정답은 자막 타임스탬프가 정하므로 코드가 안다."""
+    past = sorted([e for e in story.사건 if e.시각 < trigger_sec], key=lambda e: e.시각)
+    if len(past) < 3:
+        return []
+
+    chosen = past[-3:]
+    # 제시 순서를 한 칸 회전시킨다 — 결정론이면서 정답이 자명해지지 않는다
+    shown = [chosen[1], chosen[2], chosen[0]]
+    label_of = {id(event): ORDER_LABELS[i] for i, event in enumerate(shown)}
+
+    lines = "\n".join(f"{label_of[id(e)]}. {e.요약}" for e in shown)
+    answer = " → ".join(label_of[id(e)] for e in chosen)
+    return [Activity(
+        template="사건의_순서_파악",
+        question=f"다음 일을 일어난 순서대로 놓아보세요.\n{lines}",
+        options=None,
+        answer=answer,
+        evidence=f"자막 시각 {[e.시각 for e in chosen]} 순서를 정답으로 했다",
+        evidence_times=[e.시각 for e in chosen],
+        confidence=TEXT_CONFIDENCE,
+    )]
+
+
+def make_recall(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
+    return [Activity(
+        template="이야기_되새기기",
+        question=f"이야기에서 {intent.인물}은(는) 무엇을 하려고 했나요?",
+        options=[intent.하려던_행동, intent.다른_행동],
+        answer=intent.하려던_행동,
+        evidence=f"{intent.시각}초 자막에서 인물의 의도를 뽑았다",
+        evidence_times=[intent.시각],
+        confidence=TEXT_CONFIDENCE,
+    ) for intent in story.인물_의도 if intent.시각 < trigger_sec]
+
+
+def make_emotion(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
+    return [Activity(
+        template="감정_추론",
+        question=f"{cue.근거_자막} {cue.인물}의 마음은 어떨까요?",
+        options=[cue.감정, pick_distractor_emotion(cue.감정)],
+        answer=cue.감정,
+        evidence=f"{cue.시각}초 자막 '{cue.근거_자막}'을 근거로 삼았다",
+        evidence_times=[cue.시각],
+        confidence=TEXT_CONFIDENCE,
+    ) for cue in story.감정 if cue.시각 < trigger_sec]
+
+
+def make_theme(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
+    """이야기 전체의 주제를 묻는다. 사건 대부분이 지난 뒤에만 성립한다."""
+    if story.주제 is None or not story.사건:
+        return []
+    passed = [e for e in story.사건 if e.시각 < trigger_sec]
+    if len(passed) < len(story.사건) * THEME_MIN_EVENT_RATIO:
+        return []
+
+    return [Activity(
+        template="이야기_핵심_주제",
+        question="이 이야기에서 가장 중요하게 전하는 내용은 무엇인가요?",
+        options=[story.주제.정답, *story.주제.오답],
+        answer=story.주제.정답,
+        evidence="이야기 재료의 주제를 그대로 썼다 — 오답 선택은 모델 판단이다",
+        evidence_times=[e.시각 for e in passed],
+        confidence=MODEL_CONFIDENCE,
+    )]
+
+
+def make_cause_effect(story: StoryMaterial, trigger_sec: float) -> list[Activity]:
+    """결과 사건의 직접적인 원인을 고르게 한다. 오답은 다른 사건의 요약을 쓴다."""
+    by_time = {e.시각: e for e in story.사건}
+    activities = []
+    for causal in story.인과:
+        if causal.결과_시각 >= trigger_sec:
+            continue
+        cause = by_time.get(causal.원인_시각)
+        effect = by_time.get(causal.결과_시각)
+        if cause is None or effect is None:
+            continue
+        others = [e.요약 for e in story.사건 if e.시각 not in (cause.시각, effect.시각)]
+        if not others:
+            continue
+        activities.append(Activity(
+            template="원인과_결과",
+            question=f"'{effect.요약}'의 가장 직접적인 이유는 무엇인가요?",
+            options=[cause.요약, *others[:2]],
+            answer=cause.요약,
+            evidence=f"{cause.시각}초 사건을 {effect.시각}초 사건의 원인으로 본 모델 판단이다",
+            evidence_times=[cause.시각, effect.시각],
+            confidence=MODEL_CONFIDENCE,
+        ))
+    return activities

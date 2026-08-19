@@ -174,3 +174,86 @@ def test_compound_asks_for_the_whole_word():
 
 def test_compound_is_empty_without_a_compound_word():
     assert make_compound("오늘은 학교에 갔어요.", 시각=20.0) == []
+
+
+from activity_assembler import (
+    make_cause_effect,
+    make_emotion,
+    make_event_order,
+    make_recall,
+    make_theme,
+)
+from story_material import Causal, EmotionCue, Event, Intent, StoryMaterial, Theme
+
+
+def story():
+    return StoryMaterial(
+        사건=[
+            Event(시각=62.0, 요약="친구들이 다리 앞에 모였다"),
+            Event(시각=88.0, 요약="친구들이 다리에 올라갔다"),
+            Event(시각=104.0, 요약="구름다리가 무너졌다"),
+        ],
+        인과=[Causal(원인_시각=88.0, 결과_시각=104.0)],
+        인물_의도=[Intent(시각=62.0, 인물="할머니", 하려던_행동="청소하기", 다른_행동="요리하기")],
+        감정=[EmotionCue(시각=104.0, 인물="민수", 감정="놀랐어요", 근거_자막="구름다리가 무너졌다")],
+        주제=Theme(정답="힘을 합하면 해결된다", 오답=["혼자 옮겨야 한다", "많이 가져야 한다"]),
+    )
+
+
+def test_event_order_answer_is_chronological_and_options_are_none():
+    act = make_event_order(story(), trigger_sec=150.0)[0]
+    assert act.template == "사건의_순서_파악"
+    assert act.options is None
+    # 제시 순서는 [e1, e2, e0] 이므로 ㄱ=e1, ㄴ=e2, ㄷ=e0.
+    # 시각순 정답은 e0, e1, e2 = ㄷ → ㄱ → ㄴ
+    assert act.answer == "ㄷ → ㄱ → ㄴ"
+    assert act.confidence == 1.0
+
+
+def test_event_order_needs_three_events_before_the_trigger():
+    assert make_event_order(story(), trigger_sec=90.0) == []   # 104.0 사건이 아직 안 지났다
+
+
+def test_recall_offers_the_intended_action_against_another():
+    act = make_recall(story(), trigger_sec=100.0)[0]
+    assert act.template == "이야기_되새기기"
+    assert act.answer == "청소하기"
+    assert "요리하기" in act.options
+    assert "할머니" in act.question
+
+
+def test_recall_respects_the_trigger_boundary():
+    assert make_recall(story(), trigger_sec=50.0) == []
+
+
+def test_emotion_answer_comes_from_the_fixed_list():
+    act = make_emotion(story(), trigger_sec=150.0)[0]
+    assert act.template == "감정_추론"
+    assert act.answer == "놀랐어요"
+    assert len(act.options) == 2 and act.answer in act.options
+
+
+def test_theme_offers_three_choices_with_lower_confidence():
+    act = make_theme(story(), trigger_sec=150.0)[0]
+    assert act.template == "이야기_핵심_주제"
+    assert len(act.options) == 3
+    assert act.answer == "힘을 합하면 해결된다"
+    assert act.confidence == 0.7
+
+
+def test_theme_needs_most_events_to_have_passed():
+    assert make_theme(story(), trigger_sec=70.0) == []
+
+
+def test_cause_effect_asks_for_the_cause_of_a_past_result():
+    act = make_cause_effect(story(), trigger_sec=150.0)[0]
+    assert act.template == "원인과_결과"
+    assert "구름다리가 무너졌다" in act.question
+    assert act.answer == "친구들이 다리에 올라갔다"
+    # 사건이 3개면 원인·결과를 뺀 오답이 1개뿐이라 2지선다가 된다
+    assert 2 <= len(act.options) <= 3
+    assert act.confidence == 0.7
+
+
+def test_cause_effect_respects_the_trigger_boundary():
+    assert make_cause_effect(story(), trigger_sec=100.0) == []
