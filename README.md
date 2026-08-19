@@ -30,7 +30,7 @@ SKT FLY AI 열정4팀 최종 프로젝트
 ⑥ activity_generator      로컬 비전 LLM 호출 — 활동(관찰/선택/움직임/언어/마무리) 생성
         │
         ▼
-⑦ post_filter             점수·간격·목표 개수(target-count)로 최종 선정
+⑦ post_filter             점수·목표 개수(target-count)로 최종 선정
         │
         ▼
 [<video_id>_activities.json]
@@ -122,11 +122,11 @@ python3 -m pytest -v
 schemas.py               데이터클래스 정의
 subtitle_parser.py       SRT/VTT 파싱
 scene_detector.py        ffmpeg scene-cut 감지
-event_boundary_detector.py CLIP 임베딩 기반 사건 경계 후보 탐지
+event_boundary_detector.py  CLIP 임베딩 기반 사건 경계 후보 탐지
 safe_point_detector.py   안전 지점 탐지 (침묵·문장 완결·간격, 모델 호출 없음)
 frame_sampler.py         ffmpeg 프레임 추출
 activity_generator.py    활동 생성 (비전 LLM)
-post_filter.py           점수·간격·개수 기반 최종 선정
+post_filter.py            점수·개수 기반 최종 선정
 run_pipeline.py          CLI 오케스트레이터
 tests/                    단위 테스트
 ```
