@@ -1,4 +1,9 @@
-from safe_point_detector import is_sentence_closed
+from safe_point_detector import is_sentence_closed, find_raw_safe_points
+from schemas import SubtitleSegment
+
+
+def seg(text, start, end):
+    return SubtitleSegment(text=text, start_sec=start, end_sec=end)
 
 
 def test_treats_sentence_punctuation_as_closed():
@@ -29,3 +34,41 @@ def test_treats_continuing_clause_as_open():
 def test_treats_empty_text_as_open():
     assert not is_sentence_closed("")
     assert not is_sentence_closed("   ")
+
+
+def test_keeps_line_followed_by_silence():
+    segments = [
+        seg("첫 대사야.", 0.0, 5.0),
+        seg("두 번째 대사야.", 8.0, 12.0),
+    ]
+    raw = find_raw_safe_points(segments, video_duration_sec=20.0, min_silence_sec=1.0)
+    # 0번 줄 뒤 침묵 3초, 1번 줄 뒤 침묵 8초 — 둘 다 통과
+    assert raw == [(0, 5.0, 3.0), (1, 12.0, 8.0)]
+
+
+def test_drops_line_with_insufficient_silence():
+    segments = [
+        seg("첫 대사야.", 0.0, 5.0),
+        seg("바로 이어지는 대사야.", 5.2, 9.0),
+    ]
+    raw = find_raw_safe_points(segments, video_duration_sec=20.0, min_silence_sec=1.0)
+    assert [idx for idx, _, _ in raw] == [1]
+
+
+def test_drops_line_that_is_not_sentence_closed():
+    segments = [
+        seg("이젠 내가", 0.0, 5.0),
+        seg("해내겠어.", 10.0, 13.0),
+    ]
+    raw = find_raw_safe_points(segments, video_duration_sec=20.0, min_silence_sec=1.0)
+    assert [idx for idx, _, _ in raw] == [1]
+
+
+def test_uses_video_duration_as_silence_for_last_line():
+    segments = [seg("마지막 대사야.", 0.0, 5.0)]
+    raw = find_raw_safe_points(segments, video_duration_sec=9.0, min_silence_sec=1.0)
+    assert raw == [(0, 5.0, 4.0)]
+
+
+def test_returns_empty_for_no_segments():
+    assert find_raw_safe_points([], video_duration_sec=10.0) == []
