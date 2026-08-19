@@ -174,3 +174,49 @@ def test_banned_word_in_model_decided_activity_asks_for_regeneration():
 def test_judging_does_not_drop_anything():
     pool = [pooled(), pooled(question="귀신이 나왔어요")]
     assert len(judge_status(pool)) == 2
+
+
+from pool_builder import build_output
+
+
+def test_output_follows_the_contract():
+    pool = judge_status([pooled()])
+    out = build_output("tinyping", {"video_file": "a.mp4"}, [20.0, 40.0], pool, target_count=3)
+    assert out["video_id"] == "tinyping"
+    assert out["source"] == {"video_file": "a.mp4"}
+    assert out["safe_points"] == [20.0, 40.0]
+    assert set(out["scenarios"]) == {"3-4", "5-6", "7"}
+    assert out["scenarios"]["3-4"] == ["a01"]
+    [item] = out["pool"]
+    assert item["id"] == "a01"
+    assert item["status"] == "ready"
+    assert item["rejected_reason"] is None
+    assert item["evidence"]["재료_시각"] == [10.0]
+    assert item["evidence"]["검증"] == "코드 결정론"
+
+
+def test_model_decided_activity_is_marked_as_such():
+    pool = [pooled(template="이야기_핵심_주제", confidence=0.7)]
+    out = build_output("v", {}, [20.0], pool, target_count=3)
+    assert out["pool"][0]["evidence"]["검증"] == "모델 판단"
+
+
+def test_yield_counts_every_status():
+    pool = judge_status([pooled(), pooled(question="귀신이 나왔어요")])
+    out = build_output("v", {}, [20.0, 40.0], pool, target_count=3)
+    assert out["yield"] == {
+        "safe_points": 2, "pool": 2, "ready": 1, "regenerate": 0, "review": 1,
+        "status": "ok",
+    }
+
+
+def test_a_video_with_no_activity_is_sent_to_review():
+    out = build_output("v", {}, [20.0], [], target_count=3)
+    assert out["yield"]["pool"] == 0
+    assert out["yield"]["status"] == "review"
+
+
+def test_a_video_whose_activities_are_all_rejected_is_sent_to_review():
+    pool = judge_status([pooled(question="귀신이 나왔어요")])
+    out = build_output("v", {}, [20.0], pool, target_count=3)
+    assert out["yield"]["status"] == "review"

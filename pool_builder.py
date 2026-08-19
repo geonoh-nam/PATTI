@@ -168,3 +168,54 @@ def _banned_hit(activity: PooledActivity) -> str | None:
     """활동이 아이에게 보여주는 모든 문자열에서 금칙어를 찾는다."""
     haystack = " ".join([activity.question, activity.answer, *(activity.options or [])])
     return next((word for word in BANNED_WORDS if word in haystack), None)
+
+
+def build_output(
+    video_id: str,
+    source: dict,
+    safe_points: list[float],
+    pool: list[PooledActivity],
+    target_count: int,
+) -> dict:
+    """설계 §6 출력 계약. 풀은 자르지 않고 전량 싣는다."""
+    # scenario_builder 가 PooledActivity 를 쓰므로 여기서만 늦게 부른다(순환 import 회피).
+    from scenario_builder import build_scenarios
+
+    ready = [a for a in pool if a.status == "ready"]
+    return {
+        "video_id": video_id,
+        "source": source,
+        "safe_points": safe_points,
+        "pool": [_serialize(a) for a in pool],
+        "scenarios": build_scenarios(pool, target_count),
+        "yield": {
+            "safe_points": len(safe_points),
+            "pool": len(pool),
+            "ready": len(ready),
+            "regenerate": sum(1 for a in pool if a.status == "regenerate"),
+            "review": sum(1 for a in pool if a.status == "review"),
+            # 활동 0개인 영상은 성공이 아니다 — 운영자 검토 대기열로 보낸다.
+            "status": "ok" if ready else "review",
+        },
+    }
+
+
+def _serialize(activity: PooledActivity) -> dict:
+    return {
+        "id": activity.id,
+        "trigger_sec": activity.trigger_sec,
+        "age_tier": activity.age_tier,
+        "category": activity.category,
+        "template": activity.template,
+        "question": activity.question,
+        "options": activity.options,
+        "answer": activity.answer,
+        "status": activity.status,
+        "confidence": activity.confidence,
+        "evidence": {
+            "재료_시각": activity.evidence_times,
+            "설명": activity.evidence,
+            "검증": "코드 결정론" if activity.confidence >= 0.9 else "모델 판단",
+        },
+        "rejected_reason": activity.rejected_reason,
+    }
