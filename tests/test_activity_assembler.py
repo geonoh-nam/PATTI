@@ -63,3 +63,65 @@ def test_find_object_uses_an_object_absent_from_this_scene():
 
 def test_find_object_is_empty_without_an_absent_object():
     assert make_find_object(scene(주체들=["나비"], 사물=["나무"]), 외부_사물=["나무"]) == []
+
+
+from activity_assembler import make_first_letter, make_mimetic, make_missing_letter, make_same_initial
+
+
+def test_first_letter_makes_one_activity_per_subject():
+    acts = make_first_letter(scene(주체들=["나비", "호랑이"]))
+    assert [a.answer for a in acts] == ["나", "호"]
+    assert all(a.template == "사물_첫글자_찾기" for a in acts)
+
+
+def test_first_letter_skips_single_syllable_subjects():
+    assert make_first_letter(scene(주체들=["공"])) == []
+
+
+def test_same_initial_needs_a_word_with_a_different_initial():
+    acts = make_same_initial(scene(주체들=["나비"], 사물=["모자"]))
+    assert len(acts) == 1
+    act = acts[0]
+    assert act.template == "같은_글자로_시작하는_낱말"
+    assert "ㄴ" in act.question
+    assert act.answer == "나비"
+    assert "모자" in act.options
+
+
+def test_same_initial_is_empty_when_every_word_shares_the_initial():
+    assert make_same_initial(scene(주체들=["나비"], 사물=["나무"])) == []
+
+
+def test_missing_letter_blanks_the_second_syllable():
+    acts = make_missing_letter(scene(주체들=["호랑이"]))
+    assert len(acts) == 1
+    assert "호□이" in acts[0].question
+    assert acts[0].answer == "랑"
+
+
+def test_missing_letter_needs_three_syllables():
+    assert make_missing_letter(scene(주체들=["나비", "공"])) == []
+
+
+def test_mimetic_inserts_a_blank_before_the_modified_word():
+    context = "공이 계단 아래로 굴러갔어요."
+    acts = make_mimetic(scene(흉내말들=[("데굴데굴", "굴러갔어요")]), context)
+    assert len(acts) == 1
+    act = acts[0]
+    assert act.template == "흉내_내는_말_이해"
+    assert "____ 굴러갔어요" in act.question
+    assert "데굴데굴" not in act.question      # 정답이 질문에 노출되면 안 된다
+    assert act.answer == "데굴데굴"
+    assert len(act.options) == 2
+
+
+def test_mimetic_distractor_is_from_another_category():
+    from activity_dictionaries import MIMETIC_WORDS
+
+    act = make_mimetic(scene(흉내말들=[("데굴데굴", "굴러갔어요")]), "공이 굴러갔어요.")[0]
+    other = [o for o in act.options if o != act.answer][0]
+    assert MIMETIC_WORDS[other][1] != MIMETIC_WORDS["데굴데굴"][1]
+
+
+def test_mimetic_is_empty_without_a_choice():
+    assert make_mimetic(scene(흉내말들=[]), "공이 굴러갔어요.") == []
