@@ -28,23 +28,17 @@ def test_drops_unsuitable_and_low_score_candidates():
         assert reason  # 이유가 비어있지 않아야 함
 
 
-def test_reenforces_minimum_spacing_after_filtering():
-    candidates = [
-        make(10.0, 0.9),
-        make(40.0, 0.9),
-        make(60.0, 0.9),
-    ]
-    kept, dropped = filter_and_cap(candidates, score_threshold=0.5, min_spacing_sec=45.0)
-    assert [c.timestamp_sec for c in kept] == [10.0, 60.0]
-    assert len(dropped) == 1
-    dropped_candidate, reason = dropped[0]
-    assert dropped_candidate.timestamp_sec == 40.0
-    assert "간격" in reason
+def test_keeps_closely_spaced_candidates_because_spacing_is_owned_by_detection():
+    # 간격은 safe_point_detector가 이미 강제했으므로 여기서 다시 솎지 않는다
+    candidates = [make(10.0, 0.9), make(40.0, 0.9), make(60.0, 0.9)]
+    kept, dropped = filter_and_cap(candidates, score_threshold=0.5)
+    assert [c.timestamp_sec for c in kept] == [10.0, 40.0, 60.0]
+    assert dropped == []
 
 
 def test_caps_total_count_by_keeping_highest_scores():
     candidates = [make(i * 100.0, score=1.0 - i * 0.1) for i in range(10)]
-    kept, dropped = filter_and_cap(candidates, score_threshold=0.0, min_spacing_sec=0.0, max_per_video=3)
+    kept, dropped = filter_and_cap(candidates, score_threshold=0.0, max_per_video=3)
     assert len(kept) == 3
     timestamps = [c.timestamp_sec for c in kept]
     assert timestamps == sorted(timestamps)
