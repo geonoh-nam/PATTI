@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { parseSrt } from './srt.js';
 import { parseRange } from './media.js';
+import { toActivityRow, swatchFor, COLOR_SWATCHES, PALETTE } from './activity-payload.js';
 import { openDb, upsertChild, startSession, endSession, addActivityResult, getReport,
          upsertCategory, insertVideo, replaceActivities } from './db.js';
 
@@ -86,6 +87,59 @@ test('getReport sums watch time and counts activity results', () => {
   assert.equal(r.drawing, 1);
   assert.equal(r.skip, 1);
   assert.equal(r.recent[0].title, 'V1');
+});
+
+test('swatchFor cycles the palette for non-colour activities', () => {
+  const got = ['a', 'b', 'c', 'd', 'e'].map((l, i) => swatchFor('감정_추론', l, i));
+  assert.deepEqual(got.slice(0, 4), PALETTE);
+  assert.deepEqual(got[4], PALETTE[0], '팔레트를 한 바퀴 돌면 처음으로 돌아온다');
+});
+
+test('swatchFor matches the label for 색_찾기', () => {
+  // 색을 묻는 문제에서 "파란색" 선택지가 팔레트 순서대로 노란색으로 칠해지면 문제가 깨진다.
+  assert.deepEqual(swatchFor('색_찾기', '파란색', 0), COLOR_SWATCHES['파란색']);
+  assert.deepEqual(swatchFor('색_찾기', '빨간색', 1), COLOR_SWATCHES['빨간색']);
+  assert.notDeepEqual(swatchFor('색_찾기', '파란색', 0), PALETTE[0]);
+});
+
+test('swatchFor throws on a colour name it does not know', () => {
+  // 틀린 색으로 칠한 문제를 아이에게 내보내느니 활동 하나를 잃는 편이 낫다.
+  assert.throws(() => swatchFor('색_찾기', '형광색', 0), /형광색/);
+});
+
+test('toActivityRow maps a oneshot activity onto the app payload', () => {
+  const row = toActivityRow({
+    timestamp_sec: 55.4,
+    activity_template: '감정_추론',
+    question: '핑이는 어떤 마음일까요?',
+    options: ['기뻐요', '슬퍼요', '무서워요'],
+    answer: '기뻐요',
+    scene_description: '핑이가 웃는다',
+    why_here: '대사가 끝난 직후',
+  });
+  assert.equal(row.at_sec, 55, 'timestamp_sec 은 정수로 반올림한다');
+  assert.equal(row.type, 'quiz');
+  assert.equal(row.payload.title, '핑이는 어떤 마음일까요?', 'question 은 title 이 된다');
+  assert.equal(row.payload.activity_template, '감정_추론', '유형은 리포트와 가중치가 쓰므로 보존한다');
+  assert.equal(row.payload.options.length, 3);
+  assert.equal(row.payload.options[0].label, '기뻐요');
+  assert.ok(row.payload.options[0].color, '선택지마다 색이 붙는다');
+  assert.equal(row.payload.answer, '기뻐요');
+  assert.ok(row.payload.options.some((o) => o.label === row.payload.answer), '정답은 선택지 안에 있다');
+});
+
+test('toActivityRow paints 색_찾기 options by their own name', () => {
+  const row = toActivityRow({
+    timestamp_sec: 12,
+    activity_template: '색_찾기',
+    question: '화면에 없는 색은 무엇일까요?',
+    options: ['빨간색', '파란색', '초록색'],
+    answer: '초록색',
+  });
+  assert.deepEqual(
+    row.payload.options.map((o) => o.color),
+    ['빨간색', '파란색', '초록색'].map((n) => COLOR_SWATCHES[n].color)
+  );
 });
 
 let failed = 0;
