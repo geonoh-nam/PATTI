@@ -115,35 +115,43 @@ const video = {
 
 // Mock video library. Shaped for a later DB swap: replace this array with a fetch
 // that returns the same { id, label, videos:[{ id, title, duration, emoji, color }] }.
-// 서버에 있는 영상을 홈 카드 목록 맨 앞에 끼워 넣는다. LIBRARY 를 통째로 갈아끼우지
-// 않는 이유는 화면들이 LIBRARY[0], LIBRARY[1] 처럼 인덱스로 참조하고 있어서다.
-// 서버가 없으면 하드코딩 목록이 그대로 쓰인다.
-function useLibrary() {
-  const [serverVideos, setServerVideos] = useState([]);
+// 서버에 있는 영상을 회차 목록 맨 앞에 끼워 넣는다.
+//
+// 홈 카드(LIBRARY[0].videos)는 개별 영상이 아니라 시리즈다. 시리즈를 고르면
+// 회차 목록 화면으로 가고, 실제로 재생되는 영상은 LIBRARY[1].videos 에서 온다.
+// 그래서 서버 영상은 이쪽에 넣어야 고를 수 있다.
+//
+// LIBRARY 를 통째로 갈아끼우지 않는 이유는 화면들이 LIBRARY[0], LIBRARY[1] 처럼
+// 인덱스로 참조하고 있어서다. 서버가 카테고리를 하나만 주면 LIBRARY[1] 이
+// undefined 가 되어 깨진다.
+function useServerVideos() {
+  const [videos, setVideos] = useState([]);
   useEffect(() => {
     let live = true;
     fetchContent('/library').then((cats) => {
       if (!live || !Array.isArray(cats)) return;
-      setServerVideos(cats.flatMap((c) => c.videos || []));
+      setVideos(cats.flatMap((c) => c.videos || []));
     });
     return () => { live = false; };
   }, []);
-  return useMemo(() => {
-    if (!serverVideos.length) return LIBRARY;
-    const extra = serverVideos.map((v) => ({
-      id: v.id,
-      title: v.title,
-      emoji: v.emoji || '⭐',
-      color: v.color || '#FFD966',
-      // 하드코딩 카드가 쓰는 필드들. 없으면 카드가 밋밋해질 뿐 깨지진 않는다.
-      tint: v.color || '#FFD966',
-      accent: v.color || '#FFD966',
-      fromServer: true,
-    }));
-    const seen = new Set(extra.map((v) => v.id));
-    const merged = [...extra, ...LIBRARY[0].videos.filter((v) => !seen.has(v.id))];
-    return [{ ...LIBRARY[0], videos: merged }, ...LIBRARY.slice(1)];
-  }, [serverVideos]);
+  return videos;
+}
+
+// 서버 영상을 회차 목록 앞에 붙인다. 서버가 없으면 원래 목록 그대로.
+function withServerVideos(list, serverVideos) {
+  if (!serverVideos.length) return list;
+  const extra = serverVideos.map((v) => ({
+    id: v.id,
+    title: v.title,
+    // 회차 카드가 쓰는 필드. 없으면 밋밋할 뿐 깨지진 않는다.
+    duration: `${Math.floor(v.duration_sec / 60)}:${String(v.duration_sec % 60).padStart(2, '0')}`,
+    color: v.color || '#FFD966',
+    tint: v.color || '#FFD966',
+    accent: v.color || '#FFD966',
+    fromServer: true,
+  }));
+  const seen = new Set(extra.map((v) => v.id));
+  return [...extra, ...list.filter((v) => !seen.has(v.id))];
 }
 
 const LIBRARY = [
@@ -828,8 +836,7 @@ function MainScreen({ profile, onStart, onMenu, onJump }) {
     setMenuOpen(next);
     Animated.spring(bubble, { toValue: next ? 1 : 0, useNativeDriver: true, speed: 14, bounciness: 10 }).start();
   };
-  const library = useLibrary();
-  const base = library[0].videos;
+  const base = LIBRARY[0].videos;
   // Cards overlap, so one step is narrower than a card.
   const step = CARD_W - CARD_OVERLAP;
   const total = base.length * step;
@@ -1043,7 +1050,8 @@ function SeriesScreen({ series, onBack, onStart }) {
   const win = useWindowDimensions();
   // 3 per row: screen padding, the hero column, the body gap and the two grid gaps come off first.
   const episodeW = Math.floor((win.width - 48 - SERIES_HERO_W - 24 - 32) / 3);
-  const episodes = series.episodes || LIBRARY[1].videos;
+  const serverVideos = useServerVideos();
+  const episodes = withServerVideos(series.episodes || LIBRARY[1].videos, serverVideos);
   return (
     <View style={[styles.seriesScreen, { backgroundColor: series.tint || '#f5f8ff' }]}>
       <View style={styles.seriesHeader}>
@@ -1186,7 +1194,10 @@ function SettingsScreen({ profile, settings, onChange, onEditProfile }) {
 function HomeScreen({ characterImage, onStart, profile, tab = 'library', onTab, onBack, series, settings, onSettings, onEditProfile, words = [] }) {
   const [focus, setFocus] = useState(0);
   // A card on the main screen opens that series; without one, fall back to the popular row.
-  const category = series ? { videos: series.episodes || LIBRARY[1].videos } : LIBRARY[0];
+  const serverVideos = useServerVideos();
+  const category = series
+    ? { videos: withServerVideos(series.episodes || LIBRARY[1].videos, serverVideos) }
+    : LIBRARY[0];
 
   return (
     <View style={styles.screen}>
