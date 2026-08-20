@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { parseSrt } from './srt.js';
 import { parseRange } from './media.js';
 import { openDb, upsertChild, startSession, endSession, addActivityResult, getReport,
@@ -86,6 +90,45 @@ test('getReport sums watch time and counts activity results', () => {
   assert.equal(r.drawing, 1);
   assert.equal(r.skip, 1);
   assert.equal(r.recent[0].title, 'V1');
+});
+
+test('insertVideo stores crop_bottom and defaults to 0', () => {
+  const db = openDb(':memory:');
+  upsertCategory(db, { id: 'c', label: 'C', sort: 0 });
+  insertVideo(db, { id: 'v1', category_id: 'c', title: 'T', duration_sec: 10, file_path: 'video/v1.mp4' });
+  insertVideo(db, { id: 'v2', category_id: 'c', title: 'T', duration_sec: 10, file_path: 'video/v2.mp4', crop_bottom: 0.22 });
+  // node:sqlite 는 null-prototype 객체를 돌려주므로 deepEqual 로 리터럴과 비교하면 실패한다.
+  const rows = db.prepare('SELECT id, crop_bottom FROM video ORDER BY id').all()
+    .map((r) => ({ id: r.id, crop_bottom: r.crop_bottom }));
+  assert.deepEqual(rows, [{ id: 'v1', crop_bottom: 0 }, { id: 'v2', crop_bottom: 0.22 }]);
+});
+
+test('insertVideo updates crop_bottom on conflict', () => {
+  const db = openDb(':memory:');
+  upsertCategory(db, { id: 'c', label: 'C', sort: 0 });
+  insertVideo(db, { id: 'v', category_id: 'c', title: 'T', duration_sec: 10, file_path: 'video/v.mp4', crop_bottom: 0.22 });
+  insertVideo(db, { id: 'v', category_id: 'c', title: 'T', duration_sec: 10, file_path: 'video/v.mp4', crop_bottom: 0.3 });
+  assert.equal(db.prepare('SELECT crop_bottom FROM video WHERE id = ?').get('v').crop_bottom, 0.3);
+});
+
+test('openDb adds crop_bottom to a database made before the column existed', () => {
+  // CREATE TABLE IF NOT EXISTS 는 기존 테이블을 그냥 두므로, 마이그레이션이 없으면
+  // 이미 쓰던 stary.db 에는 컬럼이 영영 안 생긴다.
+  const file = path.join(os.tmpdir(), `stary-migrate-${Date.now()}.db`);
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE video (
+    id TEXT PRIMARY KEY, category_id TEXT NOT NULL, title TEXT NOT NULL,
+    duration_sec INTEGER NOT NULL, file_path TEXT NOT NULL, thumb_path TEXT,
+    emoji TEXT, color TEXT, status TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+  old.prepare(`INSERT INTO video VALUES ('old', 'c', 'T', 10, 'video/old.mp4', null, null, null, 'ready', 0)`).run();
+  old.close();
+
+  const db = openDb(file);
+  const cols = db.prepare('PRAGMA table_info(video)').all().map((c) => c.name);
+  assert.ok(cols.includes('crop_bottom'));
+  assert.equal(db.prepare('SELECT crop_bottom FROM video WHERE id = ?').get('old').crop_bottom, 0);
+  db.close();
+  fs.unlinkSync(file);
 });
 
 let failed = 0;

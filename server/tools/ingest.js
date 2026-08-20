@@ -1,6 +1,7 @@
 // Put one video and its subtitles into the library.
 //   node server/tools/ingest.js <video.mp4> <subs.srt> --id <id> --category <cat> --title <title>
 // Optional: --label <카테고리 표시이름> --emoji 🐳 --color '#dbeafe' --thumb <file.png>
+//           --crop-bottom 0.22  화면에 자막이 구워진 영상에서 하단을 잘라낼 비율
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -34,6 +35,15 @@ for (let i = 0; i < rest.length; i += 2) {
 
 if (!videoArg || !srtArg || !opt.id || !opt.category || !opt.title) {
   console.error('usage: ingest.js <video.mp4> <subs.srt> --id <id> --category <cat> --title <title>');
+  process.exit(1);
+}
+
+// 영상에 자막이 구워져 있으면 프레임을 본 관찰자가 자막을 읽어버려, 활동 생성이
+// "화면에만 근거한 기록"이라는 전제를 잃는다. 값은 영상마다 다르고 사람이 프레임을
+// 한 장 열어 보고 정한다 — 그래서 자동으로 못 구하고 여기서 받는다.
+const cropBottom = Number(opt['crop-bottom'] ?? 0);
+if (!Number.isFinite(cropBottom) || cropBottom < 0 || cropBottom >= 0.5) {
+  console.error('--crop-bottom 은 0 이상 0.5 미만이어야 합니다 (받은 값: ' + opt['crop-bottom'] + ')');
   process.exit(1);
 }
 
@@ -102,6 +112,7 @@ insertVideo(db, {
   thumb_path: hasThumb ? thumbRel : null,
   emoji: opt.emoji,
   color: opt.color,
+  crop_bottom: cropBottom,
 });
 
 const cues = parseSrt(fs.readFileSync(srtArg, 'utf8'));
