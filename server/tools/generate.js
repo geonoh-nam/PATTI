@@ -16,7 +16,7 @@ if (!videoId) {
 }
 
 const db = openDb(path.join(SERVER_DIR, 'data', 'stary.db'));
-const video = db.prepare('SELECT id, duration_sec FROM video WHERE id = ?').get(videoId);
+const video = db.prepare('SELECT id, duration_sec, file_path, crop_bottom FROM video WHERE id = ?').get(videoId);
 if (!video) {
   console.error(`no video ${videoId}`);
   process.exit(1);
@@ -24,7 +24,8 @@ if (!video) {
 
 setVideoStatus(db, videoId, 'analyzing');
 const cues = getSubtitles(db, videoId);
-console.log(`${cues.length} cues, ${video.duration_sec}s`);
+console.log(`${cues.length} cues, ${video.duration_sec}s, crop_bottom=${video.crop_bottom}`);
+// 진짜 생성기가 들어오면 video.crop_bottom 을 oneshot.prep 의 --crop-bottom 으로 넘긴다.
 
 // ponytail: fixed schedule stands in for the analysis. Swap this block for the real generator.
 const rows = [
