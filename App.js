@@ -1690,7 +1690,9 @@ function WatchScreen({ source = DEMO_VIDEO, activities = ACTIVITIES, quizDone, o
   };
   const handleAnswer = (label) => {
     setSelected(label);
-    if (label === quiz.answer) {
+    // 지금 떠 있는 문제와 비교한다. 모듈 상수 quiz 를 보고 있어서 서버 문제를
+    // 맞혀도 오답 처리되던 버그가 여기 있었다.
+    if (label === activeQuiz.answer) {
       setAnswered(true);
       playSound('success');
       speak('correct');
