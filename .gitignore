@@ -1,4 +1,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.ruff_cache/
+.DS_Store
+out_agents/
+out/
+*_frames/
+.env

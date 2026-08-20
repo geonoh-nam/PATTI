@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from schemas import SubtitleSegment
+from oneshot.schemas import SubtitleSegment
 
 _SRT_TIME_RE = re.compile(
     r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})"
