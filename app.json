@@ -29,7 +29,7 @@
     "extra": {
       "targetDevice": "android-tablet",
       "eas": {
-        "projectId": "1bbbfae1-4650-4a70-8715-227f29853ce8"
+        "projectId": "7fc05855-9dab-4113-943f-58c6fda22b29"
       }
     },
     "plugins": [
@@ -42,6 +42,7 @@
           "photosPermission": "아이 프로필 사진을 고르기 위해 사진 보관함을 사용합니다."
         }
       ]
-    ]
+    ],
+    "owner": "ngo4code"
   }
 }
