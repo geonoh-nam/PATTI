@@ -42,6 +42,30 @@ import IntroScreen from './Intro';
 import * as ImagePicker from 'expo-image-picker';
 
 const DEMO_VIDEO = require('./1mindemo.mp4');
+
+// 콘텐츠 서버(server/index.js). 캐릭터 생성 서버는 5055 로 따로 돈다.
+const CONTENT_PORT = 5056;
+function contentBase() {
+  const hostUri = Constants.expoConfig?.hostUri || '';
+  const host = Platform.OS === 'android' ? hostUri.split(':')[0] || 'localhost' : 'localhost';
+  return `http://${host}:${CONTENT_PORT}`;
+}
+
+// 서버가 안 떠 있어도 앱은 그대로 돈다. 데모용 상수가 폴백이다.
+// 그래야 서버 없이 시연하던 흐름이 안 깨진다.
+async function fetchContent(pathname, { timeoutMs = 4000 } = {}) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${contentBase()}${pathname}`, { signal: abort.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 // Thumbnail frames (from the demo video for now; per-video thumbnails come with the DB).
 const THUMBS = [
   require('./assets/thumbs/t1.jpg'),
@@ -159,6 +183,20 @@ const LIBRARY = [
   },
 ];
 
+// 서버 payload 를 QuizOverlay 가 기대하는 모양으로. meaning/example 은 서버가
+// 아직 안 채우므로 없을 수 있고, 없으면 낱말 카드에서 그 줄을 비운다.
+function quizFromPayload(payload) {
+  return {
+    title: payload.title,
+    audioUrl: payload.audioUrl ?? null,
+    options: payload.options.map((o) => ({
+      label: o.label, color: o.color, bg: o.bg,
+      meaning: o.meaning ?? null, example: o.example ?? null,
+    })),
+    answer: payload.answer,
+  };
+}
+
 const quiz = {
   title: '우아핑의 색깔은?',
   // audioUrl: filled from the content DB once questions are served from there.
@@ -226,6 +264,16 @@ export default function App() {
   const [characterError, setCharacterError] = useState('');
   const [quizDone, setQuizDone] = useState(false);
   const [log, setLog] = useState({ quiz: 0, drawing: 0, skip: 0 });
+  // 서버에서 받은 영상 콘텐츠(영상 경로 + 활동). 못 받으면 null 이고 데모 상수로 돈다.
+  const [videoContent, setVideoContent] = useState(null);
+  useEffect(() => {
+    if (screen !== 'watch') return;
+    let live = true;
+    // 서버가 없으면 fetchContent 가 null 을 주고, 화면은 데모 상수로 그대로 돈다.
+    fetchContent(`/videos/${selectedVideo?.id ?? 'tinyping-001'}`)
+      .then((data) => { if (live) setVideoContent(data); });
+    return () => { live = false; };
+  }, [screen, selectedVideo?.id]);
   const [quizCorrectCount, setQuizCorrectCount] = useState(0);
   const [tab, setTab] = useState('library');
   const [selectedSeries, setSelectedSeries] = useState(null);
@@ -426,15 +474,18 @@ export default function App() {
           )}
           {screen === 'watch' && (
             <WatchScreen
-              source={selectedVideo?.source || DEMO_VIDEO}
+              source={videoContent?.videoPath ? { uri: `${contentBase()}${videoContent.videoPath}` } : (selectedVideo?.source || DEMO_VIDEO)}
+              activities={videoContent?.activities?.length ? videoContent.activities : ACTIVITIES}
               quizDone={quizDone}
-              onQuizCorrect={() => {
+              onQuizCorrect={(solved = quiz) => {
                 setQuizDone(true);
                 setWords((prev) => {
                   const seen = new Set(prev.map((w) => w.word));
-                  const fresh = quiz.options
+                  // 방금 푼 문제의 선택지로 낱말 카드를 만든다. 서버 문제를 풀었는데
+                  // 데모 상수의 색깔 낱말이 쌓이던 버그가 여기 있었다.
+                  const fresh = solved.options
                     .filter((o) => !seen.has(o.label))
-                    .map((o) => ({ word: o.label, meaning: o.meaning, example: o.example, color: o.color, answer: o.label === quiz.answer }));
+                    .map((o) => ({ word: o.label, meaning: o.meaning, example: o.example, color: o.color, answer: o.label === solved.answer }));
                   return [...fresh, ...prev];
                 });
                 setLog((prev) => ({ ...prev, quiz: Math.max(prev.quiz, 1) }));
@@ -1031,8 +1082,8 @@ function WordsScreen({ words }) {
             <Text style={styles.wordText}>{w.word}</Text>
             {w.answer ? <Text style={styles.wordBadge}>정답</Text> : null}
           </View>
-          <Text style={styles.wordMeaning}>{w.meaning}</Text>
-          <Text style={styles.wordExample}>“{w.example}”</Text>
+          {w.meaning ? <Text style={styles.wordMeaning}>{w.meaning}</Text> : null}
+          {w.example ? <Text style={styles.wordExample}>“{w.example}”</Text> : null}
         </View>
       ))}
     </ScrollView>
@@ -1510,12 +1561,14 @@ function CenterPopup({ text, emoji = '✨' }) {
   );
 }
 
-function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip, onFinish, onBack, onHome, onReport }) {
+function WatchScreen({ source = DEMO_VIDEO, activities = ACTIVITIES, quizDone, onQuizCorrect, onQuizSkip, onFinish, onBack, onHome, onReport }) {
   const player = useVideoPlayer(source, (instance) => {
     instance.loop = false;
     instance.play();
   });
   const [selected, setSelected] = useState(null);
+  // 지금 떠 있는 문제. 서버 활동이면 그 payload 에서, 아니면 데모 상수.
+  const [activeQuiz, setActiveQuiz] = useState(quiz);
   const [answered, setAnswered] = useState(quizDone);
   const [countdown, setCountdown] = useState(null);
   const [active, setActive] = useState(null); // current activity type: 'quiz' | 'trace' | 'puzzle' | null
@@ -1553,27 +1606,28 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
     Animated.spring(cdAnim, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }).start();
   }, [countdown]);
 
-  // Drive triggers off the ACTIVITIES schedule: 3s countdown, then pause + show the activity.
+  // Drive triggers off the activity schedule: 3s countdown, then pause + show the activity.
+  // 목록은 인자로 온다. 서버에서 못 받았으면 ACTIVITIES 상수가 그대로 쓰인다.
   useEffect(() => {
     const id = setInterval(() => {
       const t = player.currentTime || 0;
       let cd = null;
-      for (const a of ACTIVITIES) {
+      for (const a of activities) {
         if (!firedRef.current.has(a.at) && t >= a.at - 3 && t < a.at) { cd = Math.ceil(a.at - t); break; }
       }
       setCountdown((prev) => (prev === cd ? prev : cd));
-      for (const a of ACTIVITIES) {
+      for (const a of activities) {
         if (!firedRef.current.has(a.at) && t >= a.at && t < a.at + 10) {
           firedRef.current.add(a.at);
           player.pause();
-          if (a.type === 'quiz') setSelected(null);
+          if (a.type === 'quiz') { setSelected(null); setActiveQuiz(a.payload ? quizFromPayload(a.payload) : quiz); }
           setAnnounce(a.type);
           break;
         }
       }
     }, 350);
     return () => clearInterval(id);
-  }, [player]);
+  }, [player, activities]);
 
   // When the video finishes, move to the final activities page.
   useEffect(() => {
@@ -1597,7 +1651,7 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
       setAnswered(true);
       playSound('success');
       speak('correct');
-      onQuizCorrect();
+      onQuizCorrect(activeQuiz);
     } else {
       playSound('wrong');
       speak('retry');
@@ -1645,6 +1699,7 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
         {announce ? <CenterPopup text={ACT_MSG[announce].text} emoji={ACT_MSG[announce].emoji} /> : null}
         {active === 'quiz' ? (
           <QuizOverlay
+            quiz={activeQuiz}
             selected={selected}
             onAnswer={handleAnswer}
             onRetry={() => setSelected(null)}
@@ -2138,16 +2193,16 @@ function ActivitiesScreen({ characterImage, onDrawing, onFinish }) {
   );
 }
 
-function QuizOverlay({ selected, onAnswer, onRetry, onResume, onSkip }) {
+function QuizOverlay({ quiz: q = quiz, selected, onAnswer, onRetry, onResume, onSkip }) {
   const win = useWindowDimensions();
-  const correct = selected === quiz.answer;
+  const correct = selected === q.answer;
   const shakeX = useRef(new Animated.Value(0)).current;
   const popScale = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     // Question audio is authored with the question, so playback is a single URL away.
-    if (quiz.audioUrl) speakUrl(quiz.audioUrl);
+    if (q.audioUrl) speakUrl(q.audioUrl);
     return () => stopSpeaking();
   }, []);
 
@@ -2185,18 +2240,18 @@ function QuizOverlay({ selected, onAnswer, onRetry, onResume, onSkip }) {
           </View>
           <View style={styles.questionBox}>
             <Text style={styles.quoteMark}>“</Text>
-            <Text style={styles.questionText}>{selected && correct ? '맞아 정답이야! 잘했어 :)' : selected ? '앗 다시 생각해보자~!' : quiz.title}</Text>
+            <Text style={styles.questionText}>{selected && correct ? '맞아 정답이야! 잘했어 :)' : selected ? '앗 다시 생각해보자~!' : q.title}</Text>
             <Text style={styles.quoteMark}>”</Text>
           </View>
         </View>
         {selected && correct ? (
           <View style={styles.answerResult}>
             <Text style={styles.answerLabel}>정답 :</Text>
-            <Text style={styles.answerValue}>{quiz.answer}</Text>
+            <Text style={styles.answerValue}>{q.answer}</Text>
           </View>
         ) : (
           <View style={styles.quizOptions}>
-            {quiz.options.map((option) => (
+            {q.options.map((option) => (
               <TouchableOpacity
                 key={option.label}
                 style={[
