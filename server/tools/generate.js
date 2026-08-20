@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getSubtitles, replaceActivities, setVideoStatus } from '../db.js';
+import { toActivityRow } from '../activity-payload.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.join(__dirname, '..');
