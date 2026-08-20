@@ -1,8 +1,11 @@
-__pycache__/
-*.pyc
-.pytest_cache/
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
 .DS_Store
-out_agents/
-out/
-*_frames/
-.env
+.gstack/
+
+# Media and databases live outside git: they are large and regenerable.
+*.mp4
+*.srt
