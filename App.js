@@ -115,6 +115,37 @@ const video = {
 
 // Mock video library. Shaped for a later DB swap: replace this array with a fetch
 // that returns the same { id, label, videos:[{ id, title, duration, emoji, color }] }.
+// 서버에 있는 영상을 홈 카드 목록 맨 앞에 끼워 넣는다. LIBRARY 를 통째로 갈아끼우지
+// 않는 이유는 화면들이 LIBRARY[0], LIBRARY[1] 처럼 인덱스로 참조하고 있어서다.
+// 서버가 없으면 하드코딩 목록이 그대로 쓰인다.
+function useLibrary() {
+  const [serverVideos, setServerVideos] = useState([]);
+  useEffect(() => {
+    let live = true;
+    fetchContent('/library').then((cats) => {
+      if (!live || !Array.isArray(cats)) return;
+      setServerVideos(cats.flatMap((c) => c.videos || []));
+    });
+    return () => { live = false; };
+  }, []);
+  return useMemo(() => {
+    if (!serverVideos.length) return LIBRARY;
+    const extra = serverVideos.map((v) => ({
+      id: v.id,
+      title: v.title,
+      emoji: v.emoji || '⭐',
+      color: v.color || '#FFD966',
+      // 하드코딩 카드가 쓰는 필드들. 없으면 카드가 밋밋해질 뿐 깨지진 않는다.
+      tint: v.color || '#FFD966',
+      accent: v.color || '#FFD966',
+      fromServer: true,
+    }));
+    const seen = new Set(extra.map((v) => v.id));
+    const merged = [...extra, ...LIBRARY[0].videos.filter((v) => !seen.has(v.id))];
+    return [{ ...LIBRARY[0], videos: merged }, ...LIBRARY.slice(1)];
+  }, [serverVideos]);
+}
+
 const LIBRARY = [
   {
     id: 'popular',
@@ -797,7 +828,8 @@ function MainScreen({ profile, onStart, onMenu, onJump }) {
     setMenuOpen(next);
     Animated.spring(bubble, { toValue: next ? 1 : 0, useNativeDriver: true, speed: 14, bounciness: 10 }).start();
   };
-  const base = LIBRARY[0].videos;
+  const library = useLibrary();
+  const base = library[0].videos;
   // Cards overlap, so one step is narrower than a card.
   const step = CARD_W - CARD_OVERLAP;
   const total = base.length * step;
