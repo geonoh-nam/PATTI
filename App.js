@@ -42,6 +42,30 @@ import IntroScreen from './Intro';
 import * as ImagePicker from 'expo-image-picker';
 
 const DEMO_VIDEO = require('./1mindemo.mp4');
+
+// 콘텐츠 서버(server/index.js). 캐릭터 생성 서버는 5055 로 따로 돈다.
+const CONTENT_PORT = 5056;
+function contentBase() {
+  const hostUri = Constants.expoConfig?.hostUri || '';
+  const host = Platform.OS === 'android' ? hostUri.split(':')[0] || 'localhost' : 'localhost';
+  return `http://${host}:${CONTENT_PORT}`;
+}
+
+// 서버가 안 떠 있어도 앱은 그대로 돈다. 데모용 상수가 폴백이다.
+// 그래야 서버 없이 시연하던 흐름이 안 깨진다.
+async function fetchContent(pathname, { timeoutMs = 4000 } = {}) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${contentBase()}${pathname}`, { signal: abort.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 // Thumbnail frames (from the demo video for now; per-video thumbnails come with the DB).
 const THUMBS = [
   require('./assets/thumbs/t1.jpg'),
@@ -91,6 +115,45 @@ const video = {
 
 // Mock video library. Shaped for a later DB swap: replace this array with a fetch
 // that returns the same { id, label, videos:[{ id, title, duration, emoji, color }] }.
+// 서버에 있는 영상을 회차 목록 맨 앞에 끼워 넣는다.
+//
+// 홈 카드(LIBRARY[0].videos)는 개별 영상이 아니라 시리즈다. 시리즈를 고르면
+// 회차 목록 화면으로 가고, 실제로 재생되는 영상은 LIBRARY[1].videos 에서 온다.
+// 그래서 서버 영상은 이쪽에 넣어야 고를 수 있다.
+//
+// LIBRARY 를 통째로 갈아끼우지 않는 이유는 화면들이 LIBRARY[0], LIBRARY[1] 처럼
+// 인덱스로 참조하고 있어서다. 서버가 카테고리를 하나만 주면 LIBRARY[1] 이
+// undefined 가 되어 깨진다.
+function useServerVideos() {
+  const [videos, setVideos] = useState([]);
+  useEffect(() => {
+    let live = true;
+    fetchContent('/library').then((cats) => {
+      if (!live || !Array.isArray(cats)) return;
+      setVideos(cats.flatMap((c) => c.videos || []));
+    });
+    return () => { live = false; };
+  }, []);
+  return videos;
+}
+
+// 서버 영상을 회차 목록 앞에 붙인다. 서버가 없으면 원래 목록 그대로.
+function withServerVideos(list, serverVideos) {
+  if (!serverVideos.length) return list;
+  const extra = serverVideos.map((v) => ({
+    id: v.id,
+    title: v.title,
+    // 회차 카드가 쓰는 필드. 없으면 밋밋할 뿐 깨지진 않는다.
+    duration: `${Math.floor(v.duration_sec / 60)}:${String(v.duration_sec % 60).padStart(2, '0')}`,
+    color: v.color || '#FFD966',
+    tint: v.color || '#FFD966',
+    accent: v.color || '#FFD966',
+    fromServer: true,
+  }));
+  const seen = new Set(extra.map((v) => v.id));
+  return [...extra, ...list.filter((v) => !seen.has(v.id))];
+}
+
 const LIBRARY = [
   {
     id: 'popular',
@@ -159,6 +222,20 @@ const LIBRARY = [
   },
 ];
 
+// 서버 payload 를 QuizOverlay 가 기대하는 모양으로. meaning/example 은 서버가
+// 아직 안 채우므로 없을 수 있고, 없으면 낱말 카드에서 그 줄을 비운다.
+function quizFromPayload(payload) {
+  return {
+    title: payload.title,
+    audioUrl: payload.audioUrl ?? null,
+    options: payload.options.map((o) => ({
+      label: o.label, color: o.color, bg: o.bg,
+      meaning: o.meaning ?? null, example: o.example ?? null,
+    })),
+    answer: payload.answer,
+  };
+}
+
 const quiz = {
   title: '우아핑의 색깔은?',
   // audioUrl: filled from the content DB once questions are served from there.
@@ -226,6 +303,16 @@ export default function App() {
   const [characterError, setCharacterError] = useState('');
   const [quizDone, setQuizDone] = useState(false);
   const [log, setLog] = useState({ quiz: 0, drawing: 0, skip: 0 });
+  // 서버에서 받은 영상 콘텐츠(영상 경로 + 활동). 못 받으면 null 이고 데모 상수로 돈다.
+  const [videoContent, setVideoContent] = useState(null);
+  useEffect(() => {
+    if (screen !== 'watch') return;
+    let live = true;
+    // 서버가 없으면 fetchContent 가 null 을 주고, 화면은 데모 상수로 그대로 돈다.
+    fetchContent(`/videos/${selectedVideo?.id ?? 'tinyping-001'}`)
+      .then((data) => { if (live) setVideoContent(data); });
+    return () => { live = false; };
+  }, [screen, selectedVideo?.id]);
   const [quizCorrectCount, setQuizCorrectCount] = useState(0);
   const [tab, setTab] = useState('library');
   const [selectedSeries, setSelectedSeries] = useState(null);
@@ -426,15 +513,18 @@ export default function App() {
           )}
           {screen === 'watch' && (
             <WatchScreen
-              source={selectedVideo?.source || DEMO_VIDEO}
+              source={videoContent?.videoPath ? { uri: `${contentBase()}${videoContent.videoPath}` } : (selectedVideo?.source || DEMO_VIDEO)}
+              activities={videoContent?.activities?.length ? videoContent.activities : ACTIVITIES}
               quizDone={quizDone}
-              onQuizCorrect={() => {
+              onQuizCorrect={(solved = quiz) => {
                 setQuizDone(true);
                 setWords((prev) => {
                   const seen = new Set(prev.map((w) => w.word));
-                  const fresh = quiz.options
+                  // 방금 푼 문제의 선택지로 낱말 카드를 만든다. 서버 문제를 풀었는데
+                  // 데모 상수의 색깔 낱말이 쌓이던 버그가 여기 있었다.
+                  const fresh = solved.options
                     .filter((o) => !seen.has(o.label))
-                    .map((o) => ({ word: o.label, meaning: o.meaning, example: o.example, color: o.color, answer: o.label === quiz.answer }));
+                    .map((o) => ({ word: o.label, meaning: o.meaning, example: o.example, color: o.color, answer: o.label === solved.answer }));
                   return [...fresh, ...prev];
                 });
                 setLog((prev) => ({ ...prev, quiz: Math.max(prev.quiz, 1) }));
@@ -960,7 +1050,8 @@ function SeriesScreen({ series, onBack, onStart }) {
   const win = useWindowDimensions();
   // 3 per row: screen padding, the hero column, the body gap and the two grid gaps come off first.
   const episodeW = Math.floor((win.width - 48 - SERIES_HERO_W - 24 - 32) / 3);
-  const episodes = series.episodes || LIBRARY[1].videos;
+  const serverVideos = useServerVideos();
+  const episodes = withServerVideos(series.episodes || LIBRARY[1].videos, serverVideos);
   return (
     <View style={[styles.seriesScreen, { backgroundColor: series.tint || '#f5f8ff' }]}>
       <View style={styles.seriesHeader}>
@@ -1031,8 +1122,8 @@ function WordsScreen({ words }) {
             <Text style={styles.wordText}>{w.word}</Text>
             {w.answer ? <Text style={styles.wordBadge}>정답</Text> : null}
           </View>
-          <Text style={styles.wordMeaning}>{w.meaning}</Text>
-          <Text style={styles.wordExample}>“{w.example}”</Text>
+          {w.meaning ? <Text style={styles.wordMeaning}>{w.meaning}</Text> : null}
+          {w.example ? <Text style={styles.wordExample}>“{w.example}”</Text> : null}
         </View>
       ))}
     </ScrollView>
@@ -1103,7 +1194,10 @@ function SettingsScreen({ profile, settings, onChange, onEditProfile }) {
 function HomeScreen({ characterImage, onStart, profile, tab = 'library', onTab, onBack, series, settings, onSettings, onEditProfile, words = [] }) {
   const [focus, setFocus] = useState(0);
   // A card on the main screen opens that series; without one, fall back to the popular row.
-  const category = series ? { videos: series.episodes || LIBRARY[1].videos } : LIBRARY[0];
+  const serverVideos = useServerVideos();
+  const category = series
+    ? { videos: withServerVideos(series.episodes || LIBRARY[1].videos, serverVideos) }
+    : LIBRARY[0];
 
   return (
     <View style={styles.screen}>
@@ -1510,12 +1604,14 @@ function CenterPopup({ text, emoji = '✨' }) {
   );
 }
 
-function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip, onFinish, onBack, onHome, onReport }) {
+function WatchScreen({ source = DEMO_VIDEO, activities = ACTIVITIES, quizDone, onQuizCorrect, onQuizSkip, onFinish, onBack, onHome, onReport }) {
   const player = useVideoPlayer(source, (instance) => {
     instance.loop = false;
     instance.play();
   });
   const [selected, setSelected] = useState(null);
+  // 지금 떠 있는 문제. 서버 활동이면 그 payload 에서, 아니면 데모 상수.
+  const [activeQuiz, setActiveQuiz] = useState(quiz);
   const [answered, setAnswered] = useState(quizDone);
   const [countdown, setCountdown] = useState(null);
   const [active, setActive] = useState(null); // current activity type: 'quiz' | 'trace' | 'puzzle' | null
@@ -1553,27 +1649,28 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
     Animated.spring(cdAnim, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }).start();
   }, [countdown]);
 
-  // Drive triggers off the ACTIVITIES schedule: 3s countdown, then pause + show the activity.
+  // Drive triggers off the activity schedule: 3s countdown, then pause + show the activity.
+  // 목록은 인자로 온다. 서버에서 못 받았으면 ACTIVITIES 상수가 그대로 쓰인다.
   useEffect(() => {
     const id = setInterval(() => {
       const t = player.currentTime || 0;
       let cd = null;
-      for (const a of ACTIVITIES) {
+      for (const a of activities) {
         if (!firedRef.current.has(a.at) && t >= a.at - 3 && t < a.at) { cd = Math.ceil(a.at - t); break; }
       }
       setCountdown((prev) => (prev === cd ? prev : cd));
-      for (const a of ACTIVITIES) {
+      for (const a of activities) {
         if (!firedRef.current.has(a.at) && t >= a.at && t < a.at + 10) {
           firedRef.current.add(a.at);
           player.pause();
-          if (a.type === 'quiz') setSelected(null);
+          if (a.type === 'quiz') { setSelected(null); setActiveQuiz(a.payload ? quizFromPayload(a.payload) : quiz); }
           setAnnounce(a.type);
           break;
         }
       }
     }, 350);
     return () => clearInterval(id);
-  }, [player]);
+  }, [player, activities]);
 
   // When the video finishes, move to the final activities page.
   useEffect(() => {
@@ -1593,11 +1690,13 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
   };
   const handleAnswer = (label) => {
     setSelected(label);
-    if (label === quiz.answer) {
+    // 지금 떠 있는 문제와 비교한다. 모듈 상수 quiz 를 보고 있어서 서버 문제를
+    // 맞혀도 오답 처리되던 버그가 여기 있었다.
+    if (label === activeQuiz.answer) {
       setAnswered(true);
       playSound('success');
       speak('correct');
-      onQuizCorrect();
+      onQuizCorrect(activeQuiz);
     } else {
       playSound('wrong');
       speak('retry');
@@ -1645,6 +1744,7 @@ function WatchScreen({ source = DEMO_VIDEO, quizDone, onQuizCorrect, onQuizSkip,
         {announce ? <CenterPopup text={ACT_MSG[announce].text} emoji={ACT_MSG[announce].emoji} /> : null}
         {active === 'quiz' ? (
           <QuizOverlay
+            quiz={activeQuiz}
             selected={selected}
             onAnswer={handleAnswer}
             onRetry={() => setSelected(null)}
@@ -2138,16 +2238,16 @@ function ActivitiesScreen({ characterImage, onDrawing, onFinish }) {
   );
 }
 
-function QuizOverlay({ selected, onAnswer, onRetry, onResume, onSkip }) {
+function QuizOverlay({ quiz: q = quiz, selected, onAnswer, onRetry, onResume, onSkip }) {
   const win = useWindowDimensions();
-  const correct = selected === quiz.answer;
+  const correct = selected === q.answer;
   const shakeX = useRef(new Animated.Value(0)).current;
   const popScale = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     // Question audio is authored with the question, so playback is a single URL away.
-    if (quiz.audioUrl) speakUrl(quiz.audioUrl);
+    if (q.audioUrl) speakUrl(q.audioUrl);
     return () => stopSpeaking();
   }, []);
 
@@ -2185,18 +2285,18 @@ function QuizOverlay({ selected, onAnswer, onRetry, onResume, onSkip }) {
           </View>
           <View style={styles.questionBox}>
             <Text style={styles.quoteMark}>“</Text>
-            <Text style={styles.questionText}>{selected && correct ? '맞아 정답이야! 잘했어 :)' : selected ? '앗 다시 생각해보자~!' : quiz.title}</Text>
+            <Text style={styles.questionText}>{selected && correct ? '맞아 정답이야! 잘했어 :)' : selected ? '앗 다시 생각해보자~!' : q.title}</Text>
             <Text style={styles.quoteMark}>”</Text>
           </View>
         </View>
         {selected && correct ? (
           <View style={styles.answerResult}>
             <Text style={styles.answerLabel}>정답 :</Text>
-            <Text style={styles.answerValue}>{quiz.answer}</Text>
+            <Text style={styles.answerValue}>{q.answer}</Text>
           </View>
         ) : (
           <View style={styles.quizOptions}>
-            {quiz.options.map((option) => (
+            {q.options.map((option) => (
               <TouchableOpacity
                 key={option.label}
                 style={[
